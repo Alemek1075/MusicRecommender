@@ -1,6 +1,5 @@
 using Microsoft.AspNetCore.Mvc;
-using MusicRecommender.Data;
-using MusicRecommender.Models;
+using MusicRecommender.Services;
 
 namespace MusicRecommender.Controllers;
 
@@ -8,9 +7,9 @@ namespace MusicRecommender.Controllers;
 [Route("api/[controller]")]
 public class PlaylistsController : ControllerBase
 {
-    private readonly AppDbContext _db;
+    private readonly PlaylistProcessingService _service;
 
-    public PlaylistsController(AppDbContext db) => _db = db;
+    public PlaylistsController(PlaylistProcessingService service) => _service = service;
 
     [HttpPost]
     public async Task<IActionResult> Submit([FromBody] PlaylistSubmitDto dto)
@@ -18,23 +17,19 @@ public class PlaylistsController : ControllerBase
         if (string.IsNullOrWhiteSpace(dto.Url))
             return BadRequest("Url is required.");
 
-        var playlist = new Playlist { ExternalUrl = dto.Url };
-        _db.Playlists.Add(playlist);
-        await _db.SaveChangesAsync();
-
-        var tracks = new List<TrackMetadata>
+        try
         {
-            new() { TrackName = "Bohemian Rhapsody", ArtistName = "Queen", Genre = "Rock", PlaylistId = playlist.Id },
-            new() { TrackName = "Blinding Lights", ArtistName = "The Weeknd", Genre = "Pop", PlaylistId = playlist.Id },
-            new() { TrackName = "Lose Yourself", ArtistName = "Eminem", Genre = "Hip-Hop", PlaylistId = playlist.Id },
-            new() { TrackName = "Hotel California", ArtistName = "Eagles", Genre = "Rock", PlaylistId = playlist.Id },
-            new() { TrackName = "Shape of You", ArtistName = "Ed Sheeran", Genre = "Pop", PlaylistId = playlist.Id },
-        };
-
-        _db.TrackMetadatas.AddRange(tracks);
-        await _db.SaveChangesAsync();
-
-        return Ok(new { playlist.Id, playlist.ExternalUrl, playlist.ProcessedAt, TrackCount = tracks.Count });
+            var result = await _service.ProcessAsync(dto.Url);
+            return Ok(result);
+        }
+        catch (ArgumentException ex)
+        {
+            return BadRequest(ex.Message);
+        }
+        catch (InvalidOperationException ex)
+        {
+            return BadRequest(ex.Message);
+        }
     }
 }
 

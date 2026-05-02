@@ -1,7 +1,5 @@
 using Microsoft.AspNetCore.Mvc;
-using Microsoft.EntityFrameworkCore;
-using MusicRecommender.Data;
-using MusicRecommender.Models;
+using MusicRecommender.Services;
 
 namespace MusicRecommender.Controllers;
 
@@ -9,58 +7,37 @@ namespace MusicRecommender.Controllers;
 [Route("api/[controller]")]
 public class RecommendationsController : ControllerBase
 {
-    private readonly AppDbContext _db;
+    private readonly PlaylistProcessingService _service;
 
-    private static readonly (string Track, string Artist)[] SpotifyMock =
-    [
-        ("Thunderstruck", "AC/DC"),
-        ("Starboy", "The Weeknd"),
-        ("God's Plan", "Drake"),
-        ("Yellow", "Coldplay"),
-        ("Smells Like Teen Spirit", "Nirvana"),
-        ("Levitating", "Dua Lipa"),
-        ("Blueberry Faygo", "Lil Mosey"),
-    ];
-
-    public RecommendationsController(AppDbContext db) => _db = db;
+    public RecommendationsController(PlaylistProcessingService service) => _service = service;
 
     [HttpPost("generate")]
     public async Task<IActionResult> Generate()
     {
-        var pick = SpotifyMock[Random.Shared.Next(SpotifyMock.Length)];
-
-        var recommendation = new Recommendation
+        try
         {
-            SuggestedTrackName = pick.Track,
-            SuggestedArtist = pick.Artist,
-        };
-
-        _db.Recommendations.Add(recommendation);
-        await _db.SaveChangesAsync();
-
-        return Ok(recommendation);
+            var result = await _service.GenerateAsync();
+            return Ok(result);
+        }
+        catch (InvalidOperationException ex)
+        {
+            return BadRequest(ex.Message);
+        }
     }
 
     [HttpGet("history")]
     public async Task<IActionResult> History()
     {
-        var history = await _db.Recommendations
-            .OrderByDescending(r => r.CreatedAt)
-            .ToListAsync();
-
+        var history = await _service.GetHistoryAsync();
         return Ok(history);
     }
 
     [HttpPost("{id:int}/favorite")]
     public async Task<IActionResult> MarkFavorite(int id)
     {
-        var recommendation = await _db.Recommendations.FindAsync(id);
+        var recommendation = await _service.MarkFavoriteAsync(id);
         if (recommendation is null)
             return NotFound();
-
-        recommendation.IsMarkedAsFavorite = true;
-        await _db.SaveChangesAsync();
-
         return Ok(recommendation);
     }
 }
