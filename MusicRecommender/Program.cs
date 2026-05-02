@@ -7,6 +7,11 @@ var builder = WebApplication.CreateBuilder(args);
 builder.Services.AddDbContext<AppDbContext>(options =>
     options.UseNpgsql(builder.Configuration.GetConnectionString("DefaultConnection")));
 
+builder.Services.AddHttpClient("musicbrainz", client =>
+{
+    client.DefaultRequestHeaders.UserAgent.ParseAdd("MusicRecommender/1.0 (+musicrecommender)");
+    client.Timeout = TimeSpan.FromSeconds(10);
+});
 builder.Services.AddScoped<PlaylistProcessingService>();
 
 builder.Services.AddControllers()

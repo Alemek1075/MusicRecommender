@@ -12,11 +12,11 @@ public class RecommendationsController : ControllerBase
     public RecommendationsController(PlaylistProcessingService service) => _service = service;
 
     [HttpGet("generate")]
-    public async Task<IActionResult> Generate([FromQuery] int playlistId, [FromQuery] List<int>? selectedTrackIds)
+    public async Task<IActionResult> Generate([FromQuery] int playlistId, [FromQuery] List<int>? selectedTrackNumbers)
     {
         try
         {
-            var result = await _service.GenerateAsync(playlistId, selectedTrackIds ?? []);
+            var result = await _service.GenerateAsync(playlistId, selectedTrackNumbers ?? []);
             return Ok(result);
         }
         catch (ArgumentException ex) { return BadRequest(ex.Message); }
@@ -28,14 +28,5 @@ public class RecommendationsController : ControllerBase
     {
         var history = await _service.GetHistoryAsync();
         return Ok(history);
-    }
-
-    [HttpPost("{id:int}/favorite")]
-    public async Task<IActionResult> MarkFavorite(int id)
-    {
-        var recommendation = await _service.MarkFavoriteAsync(id);
-        if (recommendation is null)
-            return NotFound();
-        return Ok(recommendation);
     }
 }

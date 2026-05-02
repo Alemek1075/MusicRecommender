@@ -34,9 +34,9 @@ public class PlaylistsController : ControllerBase
     }
 
     [HttpGet("{id:int}/tracks")]
-    public async Task<IActionResult> GetTracks(int id)
+    public async Task<IActionResult> GetTracks(int id, [FromQuery] int? trackNumber = null)
     {
-        var tracks = await _service.GetTracksAsync(id);
+        var tracks = await _service.GetTracksAsync(id, trackNumber);
         if (tracks is null)
             return NotFound();
         return Ok(tracks);
