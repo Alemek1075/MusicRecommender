@@ -20,6 +20,41 @@ public class PlaylistProcessingService
     private readonly AppDbContext _db;
     private readonly IConfiguration _config;
 
+    private static readonly (string Name, string Artist, int DurationMs, string Genre)[] MockSpotifyTracks =
+    [
+        ("Anti-Hero", "Taylor Swift", 200690, "Pop"),
+        ("Flowers", "Miley Cyrus", 200455, "Pop"),
+        ("As It Was", "Harry Styles", 167303, "Pop"),
+        ("Unholy", "Sam Smith", 156943, "Pop"),
+        ("Bad Habit", "Steve Lacy", 233872, "Alternative"),
+        ("About Damn Time", "Lizzo", 193620, "Pop"),
+        ("Levitating", "Dua Lipa", 203064, "Pop"),
+        ("Blinding Lights", "The Weeknd", 200667, "Synth-pop"),
+        ("Save Your Tears", "The Weeknd", 215627, "Synth-pop"),
+        ("Starboy", "The Weeknd", 230453, "R&B"),
+        ("Industry Baby", "Lil Nas X", 212000, "Hip-Hop"),
+        ("Montero (Call Me By Your Name)", "Lil Nas X", 137417, "Hip-Hop"),
+        ("Easy On Me", "Adele", 224983, "Pop"),
+        ("Heat Waves", "Glass Animals", 238805, "Indie Pop"),
+        ("Stay", "The Kid LAROI", 141805, "Pop"),
+        ("Peaches", "Justin Bieber", 198082, "Pop"),
+        ("good 4 u", "Olivia Rodrigo", 178147, "Pop-Punk"),
+        ("drivers license", "Olivia Rodrigo", 242136, "Pop"),
+        ("Shivers", "Ed Sheeran", 207853, "Pop"),
+        ("Shape of You", "Ed Sheeran", 233712, "Pop"),
+    ];
+
+    private static readonly (string Title, string Artist)[] MockSpotifyRecommendations =
+    [
+        ("Cruel Summer", "Taylor Swift"),
+        ("Golden Hour", "JVKE"),
+        ("Calm Down", "Rema"),
+        ("I Ain't Worried", "OneRepublic"),
+        ("Running Up That Hill", "Kate Bush"),
+        ("Escapism", "RAYE"),
+        ("Surrender", "Natalie Taylor"),
+    ];
+
     public PlaylistProcessingService(AppDbContext db, IConfiguration config)
     {
         _db = db;
@@ -123,7 +158,8 @@ public class PlaylistProcessingService
         if (!queryParams.TryGetValue("list", out var listValues) || string.IsNullOrWhiteSpace(listValues.FirstOrDefault()))
             throw new ArgumentException("No YouTube playlist ID found in URL. Ensure the URL contains a 'list' parameter.");
 
-        var playlistId = listValues.First()!;
+        var playlistId = listValues.First()!.Trim();
+        var canonicalUrl = $"https://www.youtube.com/playlist?list={playlistId}";
         var youtube = new YoutubeClient();
 
         var rawVideos = new List<(string Title, string ChannelTitle, TimeSpan Duration)>();
@@ -133,7 +169,7 @@ public class PlaylistProcessingService
         if (rawVideos.Count == 0)
             throw new InvalidOperationException("The YouTube playlist is empty or could not be accessed.");
 
-        var playlist = new Playlist { ExternalUrl = url };
+        var playlist = new Playlist { ExternalUrl = canonicalUrl };
         var totalDuration = TimeSpan.Zero;
 
         foreach (var (videoTitle, channelTitle, duration) in rawVideos)
@@ -185,11 +221,12 @@ public class PlaylistProcessingService
 
         var clientId = _config["Spotify:ClientId"];
         var clientSecret = _config["Spotify:ClientSecret"];
-        if (string.IsNullOrWhiteSpace(clientId) || string.IsNullOrWhiteSpace(clientSecret))
-            throw new InvalidOperationException("Spotify:ClientId and Spotify:ClientSecret must be set in appsettings.json.");
+
+        if (string.IsNullOrWhiteSpace(clientId) || clientId == "mock_id")
+            return await ProcessSpotifyMockAsync(url);
 
         var spotifyConfig = SpotifyClientConfig.CreateDefault()
-            .WithAuthenticator(new ClientCredentialsAuthenticator(clientId, clientSecret));
+            .WithAuthenticator(new ClientCredentialsAuthenticator(clientId, clientSecret!));
         var spotify = new SpotifyClient(spotifyConfig);
 
         var spotifyPlaylist = await spotify.Playlists.Get(playlistId);
@@ -261,6 +298,47 @@ public class PlaylistProcessingService
 
         var trackList = playlist.Tracks.ToList();
         var stats = new PlaylistStats(null, topArtist, trackList.Count, (int)totalDuration.TotalHours, totalDuration.Minutes);
+        return new PlaylistProcessingResult(playlist, trackList, recommendation, stats);
+    }
+
+    private async Task<PlaylistProcessingResult> ProcessSpotifyMockAsync(string url)
+    {
+        var playlist = new Playlist { ExternalUrl = url };
+        var totalDurationMs = 0L;
+
+        foreach (var (name, artist, durationMs, genre) in MockSpotifyTracks)
+        {
+            playlist.Tracks.Add(new TrackMetadata { TrackName = name, ArtistName = artist, Genre = genre });
+            totalDurationMs += durationMs;
+        }
+
+        var totalDuration = TimeSpan.FromMilliseconds(totalDurationMs);
+        var topArtist = playlist.Tracks
+            .GroupBy(t => t.ArtistName)
+            .OrderByDescending(g => g.Count())
+            .First().Key;
+
+        var existingTitles = new HashSet<string>(playlist.Tracks.Select(t => t.TrackName), StringComparer.OrdinalIgnoreCase);
+        var pick = MockSpotifyRecommendations.FirstOrDefault(r => !existingTitles.Contains(r.Title));
+        var recTitle = pick.Title ?? "Cruel Summer";
+        var recArtist = pick.Artist ?? "Taylor Swift";
+
+        _db.Playlists.Add(playlist);
+        await _db.SaveChangesAsync();
+
+        var recommendation = new Recommendation { SuggestedTrackName = recTitle, SuggestedArtist = recArtist };
+        _db.Recommendations.Add(recommendation);
+        await _db.SaveChangesAsync();
+
+        var trackList = playlist.Tracks.ToList();
+        var topGenre = trackList
+            .Where(t => t.Genre != null)
+            .GroupBy(t => t.Genre)
+            .OrderByDescending(g => g.Count())
+            .Select(g => g.Key)
+            .FirstOrDefault();
+
+        var stats = new PlaylistStats(topGenre, topArtist, trackList.Count, (int)totalDuration.TotalHours, totalDuration.Minutes);
         return new PlaylistProcessingResult(playlist, trackList, recommendation, stats);
     }
 

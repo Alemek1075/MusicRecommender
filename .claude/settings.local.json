@@ -2,7 +2,8 @@
   "permissions": {
     "allow": [
       "Bash(Get-ChildItem -Path \"c:\\\\Users\\\\Alex\\\\OneDrive\\\\Desktop\\\\MusicRecommender\" -Recurse -Include \"*.cs\")",
-      "Bash(Select-Object FullName)"
+      "Bash(Select-Object FullName)",
+      "Bash(dotnet build *)"
     ]
   }
 }
