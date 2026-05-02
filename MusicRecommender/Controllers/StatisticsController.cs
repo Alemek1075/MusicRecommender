@@ -12,9 +12,9 @@ public class StatisticsController : ControllerBase
     public StatisticsController(PlaylistProcessingService service) => _service = service;
 
     [HttpGet]
-    public async Task<IActionResult> Get()
+    public async Task<IActionResult> Get([FromQuery] List<int>? playlistIds)
     {
-        var stats = await _service.GetStatisticsAsync();
+        var stats = await _service.GetStatisticsAsync(playlistIds);
         return Ok(stats);
     }
 }

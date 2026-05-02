@@ -22,14 +22,24 @@ public class PlaylistsController : ControllerBase
             var result = await _service.ProcessAsync(dto.Url);
             return Ok(result);
         }
-        catch (ArgumentException ex)
-        {
-            return BadRequest(ex.Message);
-        }
-        catch (InvalidOperationException ex)
-        {
-            return BadRequest(ex.Message);
-        }
+        catch (ArgumentException ex) { return BadRequest(ex.Message); }
+        catch (InvalidOperationException ex) { return BadRequest(ex.Message); }
+    }
+
+    [HttpGet]
+    public async Task<IActionResult> GetAll()
+    {
+        var playlists = await _service.GetPlaylistsAsync();
+        return Ok(playlists);
+    }
+
+    [HttpGet("{id:int}/tracks")]
+    public async Task<IActionResult> GetTracks(int id)
+    {
+        var tracks = await _service.GetTracksAsync(id);
+        if (tracks is null)
+            return NotFound();
+        return Ok(tracks);
     }
 }
 

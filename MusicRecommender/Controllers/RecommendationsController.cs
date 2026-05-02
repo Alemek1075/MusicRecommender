@@ -11,18 +11,16 @@ public class RecommendationsController : ControllerBase
 
     public RecommendationsController(PlaylistProcessingService service) => _service = service;
 
-    [HttpPost("generate")]
-    public async Task<IActionResult> Generate()
+    [HttpGet("generate")]
+    public async Task<IActionResult> Generate([FromQuery] int playlistId, [FromQuery] List<int>? selectedTrackIds)
     {
         try
         {
-            var result = await _service.GenerateAsync();
+            var result = await _service.GenerateAsync(playlistId, selectedTrackIds ?? []);
             return Ok(result);
         }
-        catch (InvalidOperationException ex)
-        {
-            return BadRequest(ex.Message);
-        }
+        catch (ArgumentException ex) { return BadRequest(ex.Message); }
+        catch (InvalidOperationException ex) { return BadRequest(ex.Message); }
     }
 
     [HttpGet("history")]

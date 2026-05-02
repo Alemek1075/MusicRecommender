@@ -3,6 +3,7 @@ using Microsoft.EntityFrameworkCore;
 using MusicRecommender.Data;
 using MusicRecommender.Models;
 using SpotifyAPI.Web;
+using System.Text.RegularExpressions;
 using YoutubeExplode;
 
 namespace MusicRecommender.Services;
@@ -55,10 +56,32 @@ public class PlaylistProcessingService
         ("Surrender", "Natalie Taylor"),
     ];
 
+    private static readonly Regex TitleSuffixPattern = new(
+        @"\s*[\(\[][^\)\]]*[\)\]]" +
+        @"|\s*\|\s.*$" +
+        @"|\s+[-–]\s*(?:sped[\s\-]?up|slowed(?:\s*\+\s*reverb)?|reverb|official(?:\s+(?:video|audio|lyrics?|music\s+video))?|lyrics?|audio|music\s+video|live|acoustic|karaoke|instrumental|extended|radio\s+edit|remaster(?:ed)?)$",
+        RegexOptions.IgnoreCase | RegexOptions.Compiled);
+
     public PlaylistProcessingService(AppDbContext db, IConfiguration config)
     {
         _db = db;
         _config = config;
+    }
+
+    private static string NormalizeTitle(string title) =>
+        TitleSuffixPattern.Replace(title, "").Trim().ToLowerInvariant();
+
+    private static bool IsDuplicateTitle(string candidate, HashSet<string> existingNormalized)
+    {
+        var norm = NormalizeTitle(candidate);
+        if (norm.Length == 0) return true;
+        foreach (var e in existingNormalized)
+        {
+            if (norm == e) return true;
+            if (e.Length >= 5 && norm.Contains(e)) return true;
+            if (norm.Length >= 5 && e.Contains(norm)) return true;
+        }
+        return false;
     }
 
     public async Task<PlaylistProcessingResult> ProcessAsync(string url)
@@ -77,27 +100,38 @@ public class PlaylistProcessingService
         throw new ArgumentException("URL must be a Spotify or YouTube playlist link.");
     }
 
-    public async Task<Recommendation> GenerateAsync()
+    public async Task<Recommendation> GenerateAsync(int playlistId, List<int> selectedTrackIds)
     {
-        var tracks = await _db.TrackMetadatas.ToListAsync();
+        var tracks = await _db.TrackMetadatas.Where(t => t.PlaylistId == playlistId).ToListAsync();
         if (tracks.Count == 0)
-            throw new InvalidOperationException("No tracks in the database. Submit a playlist first.");
+            throw new InvalidOperationException("Playlist not found or has no tracks.");
+
+        var selectedSet = new HashSet<int>(selectedTrackIds);
 
         var topArtist = tracks
             .GroupBy(t => t.ArtistName)
-            .OrderByDescending(g => g.Count())
+            .OrderByDescending(g => g.Sum(t => selectedSet.Contains(t.Id) ? 1.5 : 1.0))
             .First().Key;
 
-        var existingTitles = new HashSet<string>(tracks.Select(t => t.TrackName), StringComparer.OrdinalIgnoreCase);
-        var youtube = new YoutubeClient();
+        var topGenre = tracks
+            .Where(t => t.Genre != null)
+            .GroupBy(t => t.Genre)
+            .OrderByDescending(g => g.Sum(t => selectedSet.Contains(t.Id) ? 1.5 : 1.0))
+            .Select(g => g.Key)
+            .FirstOrDefault();
 
+        var existingNormalized = new HashSet<string>(tracks.Select(t => NormalizeTitle(t.TrackName)));
+        var youtube = new YoutubeClient();
+        var searchQuery = topGenre != null ? $"{topArtist} {topGenre}" : $"{topArtist} music";
         var recTitle = "No recommendation found";
         var recArtist = topArtist;
+        var scanned = 0;
 
-        await foreach (var result in youtube.Search.GetVideosAsync($"{topArtist} music"))
+        await foreach (var result in youtube.Search.GetVideosAsync(searchQuery))
         {
+            if (++scanned > 100) break;
             var (artist, title) = ParseYouTubeTitle(result.Title, result.Author.ChannelTitle);
-            if (!existingTitles.Contains(title))
+            if (!IsDuplicateTitle(title, existingNormalized))
             {
                 recTitle = title;
                 recArtist = artist;
@@ -111,9 +145,13 @@ public class PlaylistProcessingService
         return recommendation;
     }
 
-    public async Task<PlaylistStats> GetStatisticsAsync()
+    public async Task<PlaylistStats> GetStatisticsAsync(List<int>? playlistIds)
     {
-        var tracks = await _db.TrackMetadatas.ToListAsync();
+        IQueryable<TrackMetadata> query = _db.TrackMetadatas;
+        if (playlistIds != null && playlistIds.Count > 0)
+            query = query.Where(t => playlistIds.Contains(t.PlaylistId));
+
+        var tracks = await query.ToListAsync();
 
         if (tracks.Count == 0)
             return new PlaylistStats(null, null, 0, 0, 0);
@@ -131,7 +169,20 @@ public class PlaylistProcessingService
             .Select(g => g.Key)
             .FirstOrDefault();
 
-        return new PlaylistStats(topGenre, topArtist, tracks.Count, 0, 0);
+        var totalDuration = TimeSpan.FromMilliseconds(tracks.Sum(t => (long)t.DurationMs));
+        return new PlaylistStats(topGenre, topArtist, tracks.Count, (int)totalDuration.TotalHours, totalDuration.Minutes);
+    }
+
+    public async Task<List<Playlist>> GetPlaylistsAsync()
+    {
+        return await _db.Playlists.OrderByDescending(p => p.ProcessedAt).ToListAsync();
+    }
+
+    public async Task<List<TrackMetadata>?> GetTracksAsync(int playlistId)
+    {
+        var exists = await _db.Playlists.AnyAsync(p => p.Id == playlistId);
+        if (!exists) return null;
+        return await _db.TrackMetadatas.Where(t => t.PlaylistId == playlistId).ToListAsync();
     }
 
     public async Task<List<Recommendation>> GetHistoryAsync()
@@ -175,7 +226,7 @@ public class PlaylistProcessingService
         foreach (var (videoTitle, channelTitle, duration) in rawVideos)
         {
             var (artist, title) = ParseYouTubeTitle(videoTitle, channelTitle);
-            playlist.Tracks.Add(new TrackMetadata { TrackName = title, ArtistName = artist, Genre = null });
+            playlist.Tracks.Add(new TrackMetadata { TrackName = title, ArtistName = artist, Genre = null, DurationMs = (int)duration.TotalMilliseconds });
             totalDuration += duration;
         }
 
@@ -184,14 +235,16 @@ public class PlaylistProcessingService
             .OrderByDescending(g => g.Count())
             .First().Key;
 
-        var existingTitles = new HashSet<string>(playlist.Tracks.Select(t => t.TrackName), StringComparer.OrdinalIgnoreCase);
+        var existingNormalized = new HashSet<string>(playlist.Tracks.Select(t => NormalizeTitle(t.TrackName)));
         var recTitle = "No recommendation found";
         var recArtist = topArtist;
+        var checkedYt = 0;
 
         await foreach (var result in youtube.Search.GetVideosAsync($"{topArtist} music"))
         {
+            if (++checkedYt > 100) break;
             var (artist, title) = ParseYouTubeTitle(result.Title, result.Author.ChannelTitle);
-            if (!existingTitles.Contains(title))
+            if (!IsDuplicateTitle(title, existingNormalized))
             {
                 recTitle = title;
                 recArtist = artist;
@@ -254,7 +307,7 @@ public class PlaylistProcessingService
 
         foreach (var (name, artist, durationMs) in rawTracks)
         {
-            playlist.Tracks.Add(new TrackMetadata { TrackName = name, ArtistName = artist, Genre = null });
+            playlist.Tracks.Add(new TrackMetadata { TrackName = name, ArtistName = artist, Genre = null, DurationMs = durationMs });
             totalDurationMs += durationMs;
         }
 
@@ -264,7 +317,7 @@ public class PlaylistProcessingService
             .OrderByDescending(g => g.Count())
             .First().Key;
 
-        var existingTitles = new HashSet<string>(playlist.Tracks.Select(t => t.TrackName), StringComparer.OrdinalIgnoreCase);
+        var existingNormalized = new HashSet<string>(playlist.Tracks.Select(t => NormalizeTitle(t.TrackName)));
         var recTitle = "No recommendation found";
         var recArtist = topArtist;
 
@@ -276,10 +329,10 @@ public class PlaylistProcessingService
 
             if (artistId != null)
             {
-                var recRequest = new RecommendationsRequest { Limit = 10 };
+                var recRequest = new RecommendationsRequest { Limit = 20 };
                 recRequest.SeedArtists.Add(artistId);
                 var recResponse = await spotify.Browse.GetRecommendations(recRequest);
-                var pick = recResponse.Tracks.FirstOrDefault(t => !existingTitles.Contains(t.Name));
+                var pick = recResponse.Tracks.FirstOrDefault(t => !IsDuplicateTitle(t.Name, existingNormalized));
                 if (pick != null)
                 {
                     recTitle = pick.Name;
@@ -308,7 +361,7 @@ public class PlaylistProcessingService
 
         foreach (var (name, artist, durationMs, genre) in MockSpotifyTracks)
         {
-            playlist.Tracks.Add(new TrackMetadata { TrackName = name, ArtistName = artist, Genre = genre });
+            playlist.Tracks.Add(new TrackMetadata { TrackName = name, ArtistName = artist, Genre = genre, DurationMs = durationMs });
             totalDurationMs += durationMs;
         }
 
@@ -318,8 +371,8 @@ public class PlaylistProcessingService
             .OrderByDescending(g => g.Count())
             .First().Key;
 
-        var existingTitles = new HashSet<string>(playlist.Tracks.Select(t => t.TrackName), StringComparer.OrdinalIgnoreCase);
-        var pick = MockSpotifyRecommendations.FirstOrDefault(r => !existingTitles.Contains(r.Title));
+        var existingNormalized = new HashSet<string>(playlist.Tracks.Select(t => NormalizeTitle(t.TrackName)));
+        var pick = MockSpotifyRecommendations.FirstOrDefault(r => !IsDuplicateTitle(r.Title, existingNormalized));
         var recTitle = pick.Title ?? "Cruel Summer";
         var recArtist = pick.Artist ?? "Taylor Swift";
 
