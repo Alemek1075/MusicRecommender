@@ -4,8 +4,9 @@
   "scripts": {
     "start": "concurrently \"docker-compose -f MusicRecommender/docker-compose.yml up\" \"npm --prefix MusicRecommenderFront run dev\"",
     "dev": "npm --prefix MusicRecommenderFront run dev",
-    "build": "npm --prefix MusicRecommenderFront run build",
-    "install:front": "npm --prefix MusicRecommenderFront install"
+    "build": "npm --prefix MusicRecommenderFront install && npm --prefix MusicRecommenderFront run build",
+    "install:front": "npm --prefix MusicRecommenderFront install",
+    "vercel-build": "npm --prefix MusicRecommenderFront install && npm --prefix MusicRecommenderFront run build"
   },
   "devDependencies": {
     "concurrently": "^9.0.0"
