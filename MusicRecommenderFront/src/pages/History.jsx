@@ -1,4 +1,5 @@
 import { useState, useEffect } from 'react'
+import { createPortal } from 'react-dom'
 import { api } from '../api/client'
 import LoadingSpinner from '../components/LoadingSpinner'
 import ErrorMessage from '../components/ErrorMessage'
@@ -18,14 +19,128 @@ function truncateUrl(url, max = 45) {
   return url.slice(0, max) + '…'
 }
 
-function SuggestionRow({ suggestion }) {
-  const trackNums =
-    Array.isArray(suggestion.favoriteTrackNumbers)
-      ? suggestion.favoriteTrackNumbers.join(', ')
-      : suggestion.favoriteTrackNumbers || '—'
+function ConfirmModal({ title, message, confirmLabel = 'Delete', onClose, onConfirm, busy }) {
+  return createPortal(
+    <div
+      className="fixed inset-0 z-50 flex items-center justify-center p-4"
+      style={{ backgroundColor: 'rgba(0,0,0,0.65)', backdropFilter: 'blur(6px)' }}
+      onClick={(e) => e.target === e.currentTarget && onClose()}
+    >
+      <div
+        className="w-full max-w-md rounded-2xl border border-slate-700/60 p-6 shadow-2xl"
+        style={{ backgroundColor: '#131520' }}
+      >
+        <h2 className="text-base font-semibold text-slate-100 mb-2">{title}</h2>
+        <p className="text-sm text-slate-500 mb-5">{message}</p>
+        <div className="flex gap-3">
+          <button
+            type="button"
+            onClick={onClose}
+            disabled={busy}
+            className="flex-1 py-2.5 rounded-xl text-slate-400 hover:text-slate-200 text-sm font-medium border border-slate-700/60 hover:border-slate-600 disabled:opacity-50"
+          >
+            Cancel
+          </button>
+          <button
+            type="button"
+            onClick={onConfirm}
+            disabled={busy}
+            className="flex-1 py-2.5 rounded-xl bg-red-600 hover:bg-red-500 disabled:opacity-50 text-white text-sm font-medium"
+          >
+            {busy ? 'Working…' : confirmLabel}
+          </button>
+        </div>
+      </div>
+    </div>,
+    document.body
+  )
+}
+
+function FavouritesPanel({ names, numbers }) {
+  const [open, setOpen] = useState(false)
+  const list = names && names.length ? names : (numbers || []).map((n) => `Track #${n}`)
+  const count = list.length
+
+  if (count === 0) {
+    return (
+      <p className="text-xs text-slate-700 mt-1.5">
+        Favourites: <span className="text-slate-600">none — full playlist used</span>
+      </p>
+    )
+  }
 
   return (
-    <div className="flex items-start gap-4 px-5 py-4 hover:bg-white/2 transition-colors">
+    <div className="mt-1.5 relative">
+      <button
+        type="button"
+        onClick={() => setOpen((v) => !v)}
+        className="inline-flex items-center gap-1.5 text-xs text-slate-500 hover:text-violet-300 transition-colors px-2 py-1 -mx-2 rounded-lg hover:bg-violet-500/10"
+        aria-expanded={open}
+      >
+        <svg className="w-3.5 h-3.5 text-violet-400" viewBox="0 0 24 24" fill="currentColor">
+          <polygon points="12 2 15.09 8.26 22 9.27 17 14.14 18.18 21.02 12 17.77 5.82 21.02 7 14.14 2 9.27 8.91 8.26 12 2" />
+        </svg>
+        <span>
+          {count} favourite{count !== 1 ? 's' : ''}
+        </span>
+        <svg
+          className={`w-3 h-3 transition-transform ${open ? 'rotate-180' : ''}`}
+          fill="none"
+          stroke="currentColor"
+          viewBox="0 0 24 24"
+          strokeWidth="2.5"
+        >
+          <polyline points="6 9 12 15 18 9" strokeLinecap="round" strokeLinejoin="round" />
+        </svg>
+      </button>
+
+      {open && (
+        <div
+          className="absolute bottom-full left-0 mb-2 w-72 max-w-[80vw] rounded-2xl border border-violet-500/20 shadow-xl z-30 overflow-hidden"
+          style={{ backgroundColor: '#1a1d2e' }}
+        >
+          <div className="px-4 py-2.5 border-b border-slate-700/40 flex items-center justify-between">
+            <span className="text-xs font-semibold text-violet-300 uppercase tracking-wider">
+              Chosen favourites
+            </span>
+            <span className="text-xs text-slate-600">{count}</span>
+          </div>
+          <ul className="max-h-60 overflow-y-auto py-1">
+            {list.map((name, idx) => (
+              <li
+                key={idx}
+                className="flex items-start gap-2.5 px-4 py-1.5 text-xs text-slate-300 hover:bg-white/5"
+              >
+                <span className="text-slate-700 flex-shrink-0 w-4 text-right">{idx + 1}</span>
+                <span className="flex-1 break-words leading-snug">{name}</span>
+              </li>
+            ))}
+          </ul>
+        </div>
+      )}
+    </div>
+  )
+}
+
+function SuggestionRow({ suggestion, onDelete }) {
+  const [confirm, setConfirm] = useState(false)
+  const [busy, setBusy] = useState(false)
+  const [error, setError] = useState(null)
+
+  async function handleDelete() {
+    setBusy(true)
+    setError(null)
+    try {
+      await api.deleteRecommendation(suggestion.id)
+      onDelete?.(suggestion.id)
+    } catch (err) {
+      setError(err.message)
+      setBusy(false)
+    }
+  }
+
+  return (
+    <div className="flex items-start gap-4 px-5 py-4 hover:bg-white/2 transition-colors group">
       <div className="w-8 h-8 rounded-xl bg-violet-500/14 flex items-center justify-center flex-shrink-0 mt-0.5">
         <svg
           className="w-4 h-4 text-violet-400"
@@ -43,19 +158,47 @@ function SuggestionRow({ suggestion }) {
           {suggestion.suggestedTrackName}
         </p>
         <p className="text-xs text-slate-500 mt-0.5">{suggestion.suggestedArtist}</p>
-        <p className="text-xs text-slate-700 mt-1.5">
-          Favourites: <span className="text-slate-600">{trackNums}</span>
-        </p>
+        <FavouritesPanel
+          names={suggestion.favoriteTrackNames}
+          numbers={suggestion.favoriteTrackNumbers}
+        />
+        {error && <p className="text-xs text-red-400 mt-1">{error}</p>}
       </div>
 
-      <span className="text-xs text-slate-700 flex-shrink-0 text-right leading-tight">
-        {formatDate(suggestion.createdAt)}
-      </span>
+      <div className="flex items-center gap-3 flex-shrink-0">
+        <span className="text-xs text-slate-700 text-right leading-tight">
+          {formatDate(suggestion.createdAt)}
+        </span>
+        <button
+          onClick={() => setConfirm(true)}
+          className="p-1.5 rounded-lg text-slate-600 hover:text-red-400 hover:bg-red-500/10 opacity-0 group-hover:opacity-100 transition-all"
+          aria-label="Delete suggestion"
+        >
+          <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24" strokeWidth="2">
+            <polyline points="3 6 5 6 21 6" strokeLinecap="round" strokeLinejoin="round" />
+            <path
+              d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"
+              strokeLinecap="round"
+              strokeLinejoin="round"
+            />
+          </svg>
+        </button>
+      </div>
+
+      {confirm && (
+        <ConfirmModal
+          title="Delete this suggestion?"
+          message="This single recommendation entry will be removed from history."
+          onClose={() => setConfirm(false)}
+          onConfirm={handleDelete}
+          busy={busy}
+        />
+      )}
     </div>
   )
 }
 
-function PlaylistHistoryCard({ entry }) {
+function PlaylistHistoryCard({ entry, onSuggestionDeleted, onPlaylistCleared }) {
   const isSpotify = entry.playlistUrl?.includes('spotify.com')
   const isYoutube =
     entry.playlistUrl?.includes('youtube.com') || entry.playlistUrl?.includes('youtu.be')
@@ -67,6 +210,22 @@ function PlaylistHistoryCard({ entry }) {
     : 'bg-slate-700/50 text-slate-400 border-slate-600/30'
 
   const platform = isSpotify ? 'Spotify' : isYoutube ? 'YouTube' : 'Playlist'
+
+  const [confirmClear, setConfirmClear] = useState(false)
+  const [busy, setBusy] = useState(false)
+
+  async function handleClear() {
+    setBusy(true)
+    try {
+      await api.deletePlaylistHistory(entry.playlistId)
+      onPlaylistCleared?.(entry.playlistId)
+    } catch (err) {
+      console.error(err)
+    }
+    setBusy(false)
+  }
+
+  const titleLabel = entry.playlistName?.trim() || truncateUrl(entry.playlistUrl)
 
   return (
     <div
@@ -81,21 +240,44 @@ function PlaylistHistoryCard({ entry }) {
           >
             {platform}
           </span>
-          <span className="text-xs text-slate-600 truncate">
-            {truncateUrl(entry.playlistUrl)}
-          </span>
+          <span className="text-xs text-slate-400 truncate font-medium">{titleLabel}</span>
         </div>
-        <span className="text-xs text-slate-700 flex-shrink-0 ml-3">
-          {entry.suggestions.length} suggestion{entry.suggestions.length !== 1 ? 's' : ''}
-        </span>
+        <div className="flex items-center gap-3 flex-shrink-0 ml-3">
+          <span className="text-xs text-slate-700">
+            {entry.suggestions.length} suggestion{entry.suggestions.length !== 1 ? 's' : ''}
+          </span>
+          <button
+            onClick={() => setConfirmClear(true)}
+            className="text-xs text-slate-600 hover:text-red-400 px-2.5 py-1 rounded-lg hover:bg-red-500/10 transition-all"
+          >
+            Clear all
+          </button>
+        </div>
       </div>
 
       {/* Suggestions */}
       <div className="divide-y divide-slate-800/50">
         {entry.suggestions.map((s) => (
-          <SuggestionRow key={s.id} suggestion={s} />
+          <SuggestionRow
+            key={s.id}
+            suggestion={s}
+            onDelete={(id) => onSuggestionDeleted?.(entry.playlistId, id)}
+          />
         ))}
       </div>
+
+      {confirmClear && (
+        <ConfirmModal
+          title="Clear all history for this playlist?"
+          message={`All ${entry.suggestions.length} recommendation${
+            entry.suggestions.length !== 1 ? 's' : ''
+          } for this playlist will be deleted. The playlist itself stays.`}
+          confirmLabel="Clear all"
+          onClose={() => setConfirmClear(false)}
+          onConfirm={handleClear}
+          busy={busy}
+        />
+      )}
     </div>
   )
 }
@@ -119,6 +301,22 @@ export default function History() {
   useEffect(() => {
     load()
   }, [])
+
+  function handleSuggestionDeleted(playlistId, suggestionId) {
+    setHistory((prev) =>
+      prev
+        .map((entry) =>
+          entry.playlistId === playlistId
+            ? { ...entry, suggestions: entry.suggestions.filter((s) => s.id !== suggestionId) }
+            : entry
+        )
+        .filter((entry) => entry.suggestions.length > 0)
+    )
+  }
+
+  function handlePlaylistCleared(playlistId) {
+    setHistory((prev) => prev.filter((entry) => entry.playlistId !== playlistId))
+  }
 
   const totalSuggestions = history.reduce((sum, e) => sum + e.suggestions.length, 0)
 
@@ -156,7 +354,12 @@ export default function History() {
       ) : (
         <div className="space-y-4">
           {history.map((entry) => (
-            <PlaylistHistoryCard key={entry.playlistId} entry={entry} />
+            <PlaylistHistoryCard
+              key={entry.playlistId}
+              entry={entry}
+              onSuggestionDeleted={handleSuggestionDeleted}
+              onPlaylistCleared={handlePlaylistCleared}
+            />
           ))}
         </div>
       )}

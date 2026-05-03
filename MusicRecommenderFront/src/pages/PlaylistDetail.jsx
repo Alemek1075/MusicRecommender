@@ -81,6 +81,7 @@ export default function PlaylistDetail() {
 
   const [tracks, setTracks] = useState([])
   const [stats, setStats] = useState(null)
+  const [playlist, setPlaylist] = useState(null)
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState(null)
 
@@ -92,12 +93,14 @@ export default function PlaylistDetail() {
   useEffect(() => {
     async function load() {
       try {
-        const [t, s] = await Promise.all([
+        const [t, s, all] = await Promise.all([
           api.getTracks(id),
           api.getStatistics([parseInt(id, 10)]),
+          api.getPlaylists(),
         ])
         setTracks(t || [])
         setStats(s)
+        setPlaylist((all || []).find((p) => p.id === parseInt(id, 10)) || null)
       } catch (err) {
         setError(err.message)
       }
@@ -157,7 +160,9 @@ export default function PlaylistDetail() {
           </svg>
         </button>
         <div>
-          <h1 className="text-xl font-bold text-slate-100">Playlist #{id}</h1>
+          <h1 className="text-xl font-bold text-slate-100">
+            {playlist?.name?.trim() || `Playlist #${id}`}
+          </h1>
           <p className="text-slate-600 text-sm">{tracks.length} tracks</p>
         </div>
       </div>

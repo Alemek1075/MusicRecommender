@@ -29,4 +29,19 @@ public class RecommendationsController : ControllerBase
         var history = await _service.GetHistoryAsync();
         return Ok(history);
     }
+
+    [HttpDelete("{id:int}")]
+    public async Task<IActionResult> Delete(int id)
+    {
+        var ok = await _service.DeleteRecommendationAsync(id);
+        if (!ok) return NotFound();
+        return NoContent();
+    }
+
+    [HttpDelete("playlist/{playlistId:int}")]
+    public async Task<IActionResult> DeletePlaylistHistory(int playlistId)
+    {
+        var count = await _service.DeletePlaylistHistoryAsync(playlistId);
+        return Ok(new { deleted = count });
+    }
 }

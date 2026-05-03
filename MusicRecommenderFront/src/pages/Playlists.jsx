@@ -1,30 +1,56 @@
-import { useState, useEffect } from 'react'
+import { useState, useEffect, useRef } from 'react'
 import { api } from '../api/client'
 import PlaylistCard from '../components/PlaylistCard'
 import LoadingSpinner from '../components/LoadingSpinner'
 import ErrorMessage from '../components/ErrorMessage'
+import { useImport } from '../context/ImportContext'
 
 function ImportModal({ onClose, onSuccess }) {
   const [url, setUrl] = useState('')
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState(null)
+  const [confirmInterrupt, setConfirmInterrupt] = useState(false)
+  const abortRef = useRef(null)
+  const { setIsImporting } = useImport()
 
   async function handleSubmit(e) {
     e.preventDefault()
     if (!url.trim()) return
     setLoading(true)
+    setIsImporting(true)
     setError(null)
+    const ctrl = new AbortController()
+    abortRef.current = ctrl
     try {
-      const result = await api.submitPlaylist(url.trim())
+      const result = await api.submitPlaylist(url.trim(), ctrl.signal)
       onSuccess(result)
     } catch (err) {
-      setError(err.message)
+      if (err.name !== 'AbortError') setError(err.message)
       setLoading(false)
+    }
+    setIsImporting(false)
+    abortRef.current = null
+  }
+
+  function attemptClose() {
+    if (loading) {
+      setConfirmInterrupt(true)
+    } else {
+      onClose()
     }
   }
 
+  function confirmStop() {
+    abortRef.current?.abort()
+    abortRef.current = null
+    setConfirmInterrupt(false)
+    setLoading(false)
+    setIsImporting(false)
+    onClose()
+  }
+
   function handleBackdrop(e) {
-    if (e.target === e.currentTarget) onClose()
+    if (e.target === e.currentTarget) attemptClose()
   }
 
   return (
@@ -40,7 +66,7 @@ function ImportModal({ onClose, onSuccess }) {
         <div className="flex items-center justify-between mb-6">
           <h2 className="text-base font-semibold text-slate-100">Import Playlist</h2>
           <button
-            onClick={onClose}
+            onClick={attemptClose}
             className="text-slate-600 hover:text-slate-300 transition-colors p-1"
           >
             <svg
@@ -78,7 +104,7 @@ function ImportModal({ onClose, onSuccess }) {
 
           {loading && (
             <p className="text-xs text-slate-500 text-center">
-              Fetching tracks and genre info — may take a moment…
+              Analyzing tracks and looking up genres — may take a moment…
             </p>
           )}
           {error && <ErrorMessage message={error} />}
@@ -86,7 +112,7 @@ function ImportModal({ onClose, onSuccess }) {
           <div className="flex gap-3 pt-1">
             <button
               type="button"
-              onClick={onClose}
+              onClick={attemptClose}
               className="flex-1 py-2.5 rounded-xl text-slate-400 hover:text-slate-200 text-sm font-medium transition-all border border-slate-700/60 hover:border-slate-600"
             >
               Cancel
@@ -108,6 +134,41 @@ function ImportModal({ onClose, onSuccess }) {
           </div>
         </form>
       </div>
+
+      {confirmInterrupt && (
+        <div
+          className="fixed inset-0 z-[60] flex items-center justify-center p-4"
+          style={{ backgroundColor: 'rgba(0,0,0,0.7)', backdropFilter: 'blur(8px)' }}
+          onClick={(e) => e.target === e.currentTarget && setConfirmInterrupt(false)}
+        >
+          <div
+            className="w-full max-w-sm rounded-2xl border border-slate-700/60 p-6"
+            style={{ backgroundColor: '#131520' }}
+            onClick={(e) => e.stopPropagation()}
+          >
+            <h3 className="text-base font-semibold text-slate-100 mb-2">Interrupt analysis?</h3>
+            <p className="text-sm text-slate-500 mb-5">
+              The playlist is still being processed. Stop now?
+            </p>
+            <div className="flex gap-3">
+              <button
+                type="button"
+                onClick={() => setConfirmInterrupt(false)}
+                className="flex-1 py-2.5 rounded-xl text-slate-400 hover:text-slate-200 text-sm font-medium border border-slate-700/60 hover:border-slate-600"
+              >
+                Keep going
+              </button>
+              <button
+                type="button"
+                onClick={confirmStop}
+                className="flex-1 py-2.5 rounded-xl bg-red-600 hover:bg-red-500 text-white text-sm font-medium"
+              >
+                Interrupt
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   )
 }
@@ -117,6 +178,7 @@ export default function Playlists() {
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState(null)
   const [showModal, setShowModal] = useState(false)
+  const { isImporting } = useImport()
 
   async function load() {
     setLoading(true)
@@ -149,7 +211,8 @@ export default function Playlists() {
         </div>
         <button
           onClick={() => setShowModal(true)}
-          className="flex items-center gap-2 px-4 py-2.5 rounded-xl bg-violet-600 hover:bg-violet-500 text-white text-sm font-medium transition-all"
+          disabled={isImporting}
+          className="flex items-center gap-2 px-4 py-2.5 rounded-xl bg-violet-600 hover:bg-violet-500 disabled:opacity-50 disabled:cursor-not-allowed text-white text-sm font-medium transition-all"
         >
           <svg
             className="w-4 h-4"
@@ -188,7 +251,14 @@ export default function Playlists() {
       ) : (
         <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
           {playlists.map((p) => (
-            <PlaylistCard key={p.id} playlist={p} />
+            <PlaylistCard
+              key={p.id}
+              playlist={p}
+              onRenamed={(updated) =>
+                setPlaylists((prev) => prev.map((x) => (x.id === updated.id ? { ...x, ...updated } : x)))
+              }
+              onDeleted={(id) => setPlaylists((prev) => prev.filter((x) => x.id !== id))}
+            />
           ))}
         </div>
       )}

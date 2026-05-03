@@ -41,6 +41,23 @@ public class PlaylistsController : ControllerBase
             return NotFound();
         return Ok(tracks);
     }
+
+    [HttpPatch("{id:int}")]
+    public async Task<IActionResult> Rename(int id, [FromBody] PlaylistRenameDto dto)
+    {
+        var playlist = await _service.RenamePlaylistAsync(id, dto.Name);
+        if (playlist is null) return NotFound();
+        return Ok(playlist);
+    }
+
+    [HttpDelete("{id:int}")]
+    public async Task<IActionResult> Delete(int id)
+    {
+        var ok = await _service.DeletePlaylistAsync(id);
+        if (!ok) return NotFound();
+        return NoContent();
+    }
 }
 
 public record PlaylistSubmitDto(string Url);
+public record PlaylistRenameDto(string? Name);

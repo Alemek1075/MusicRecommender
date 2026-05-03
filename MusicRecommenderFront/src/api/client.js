@@ -19,12 +19,17 @@ async function request(path, options = {}) {
 }
 
 export const api = {
-  submitPlaylist: (url) =>
-    request('/playlists', { method: 'POST', body: JSON.stringify({ url }) }),
+  submitPlaylist: (url, signal) =>
+    request('/playlists', { method: 'POST', body: JSON.stringify({ url }), signal }),
 
   getPlaylists: () => request('/playlists'),
 
   getTracks: (id) => request(`/playlists/${id}/tracks`),
+
+  renamePlaylist: (id, name) =>
+    request(`/playlists/${id}`, { method: 'PATCH', body: JSON.stringify({ name }) }),
+
+  deletePlaylist: (id) => request(`/playlists/${id}`, { method: 'DELETE' }),
 
   generateRecommendation: (playlistId, selectedTrackNumbers = []) => {
     const params = new URLSearchParams({ playlistId: String(playlistId) })
@@ -33,6 +38,11 @@ export const api = {
   },
 
   getHistory: () => request('/recommendations/history'),
+
+  deleteRecommendation: (id) => request(`/recommendations/${id}`, { method: 'DELETE' }),
+
+  deletePlaylistHistory: (playlistId) =>
+    request(`/recommendations/playlist/${playlistId}`, { method: 'DELETE' }),
 
   getStatistics: (playlistIds = []) => {
     const params = new URLSearchParams()
