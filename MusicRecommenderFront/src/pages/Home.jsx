@@ -120,7 +120,7 @@ export default function Home() {
             <circle cx="6" cy="18" r="3" />
             <circle cx="18" cy="16" r="3" />
           </svg>
-          AI-Powered Music Discovery
+          Smart Music Discovery
         </span>
 
         <h1 className="text-4xl md:text-5xl font-bold tracking-tight text-slate-100 mb-4">
