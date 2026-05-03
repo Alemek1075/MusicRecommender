@@ -364,3 +364,13 @@ FodyWeavers.xsd
 
 
 .claude
+
+# Local secrets — never commit
+appsettings.Development.json
+appsettings.Local.json
+appsettings.*.local.json
+.env
+.env.local
+.env.*.local
+*.secret.json
+secrets.json
