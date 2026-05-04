@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react'
+import { useState, useEffect, useRef, useLayoutEffect } from 'react'
 import { createPortal } from 'react-dom'
 import { api } from '../api/client'
 import LoadingSpinner from '../components/LoadingSpinner'
@@ -56,10 +56,63 @@ function ConfirmModal({ title, message, confirmLabel = 'Delete', onClose, onConf
   )
 }
 
-function FavouritesPanel({ names, numbers }) {
-  const [open, setOpen] = useState(false)
-  const list = names && names.length ? names : (numbers || []).map((n) => `Track #${n}`)
+function FavouritesPanel({ names, numbers, namesMap, isOpen, onToggle }) {
+  const buttonRef = useRef(null)
+  const panelRef = useRef(null)
+  const [position, setPosition] = useState(null)
+  const nums = numbers || []
+  const list = nums.length
+    ? nums.map((n, i) => namesMap?.[n] ?? names?.[i] ?? `Track #${n}`)
+    : []
   const count = list.length
+
+  useLayoutEffect(() => {
+    if (!isOpen) {
+      setPosition(null)
+      return
+    }
+    function compute() {
+      const btn = buttonRef.current
+      if (!btn) return
+      const rect = btn.getBoundingClientRect()
+      const panelW = Math.min(288, window.innerWidth - 16)
+      const panelH = panelRef.current?.offsetHeight ?? 240
+      const margin = 8
+      let top = rect.top - panelH - margin
+      if (top < margin) top = Math.min(rect.bottom + margin, window.innerHeight - panelH - margin)
+      let left = rect.left
+      if (left + panelW + margin > window.innerWidth) left = window.innerWidth - panelW - margin
+      if (left < margin) left = margin
+      setPosition({ top, left, width: panelW })
+    }
+    compute()
+    const raf = requestAnimationFrame(compute)
+    window.addEventListener('scroll', compute, true)
+    window.addEventListener('resize', compute)
+    return () => {
+      cancelAnimationFrame(raf)
+      window.removeEventListener('scroll', compute, true)
+      window.removeEventListener('resize', compute)
+    }
+  }, [isOpen, count])
+
+  useEffect(() => {
+    if (!isOpen) return
+    function handler(e) {
+      if (panelRef.current?.contains(e.target)) return
+      if (buttonRef.current?.contains(e.target)) return
+      onToggle(false)
+    }
+    function onKey(e) {
+      if (e.key === 'Escape') onToggle(false)
+    }
+    document.addEventListener('mousedown', handler)
+    document.addEventListener('keydown', onKey)
+    return () => {
+      document.removeEventListener('mousedown', handler)
+      document.removeEventListener('keydown', onKey)
+    }
+  }, [isOpen, onToggle])
 
   if (count === 0) {
     return (
@@ -70,12 +123,13 @@ function FavouritesPanel({ names, numbers }) {
   }
 
   return (
-    <div className="mt-1.5 relative">
+    <div className="mt-1.5">
       <button
+        ref={buttonRef}
         type="button"
-        onClick={() => setOpen((v) => !v)}
+        onClick={() => onToggle(!isOpen)}
         className="inline-flex items-center gap-1.5 text-xs text-slate-500 hover:text-violet-300 transition-colors px-2 py-1 -mx-2 rounded-lg hover:bg-violet-500/10"
-        aria-expanded={open}
+        aria-expanded={isOpen}
       >
         <svg className="w-3.5 h-3.5 text-violet-400" viewBox="0 0 24 24" fill="currentColor">
           <polygon points="12 2 15.09 8.26 22 9.27 17 14.14 18.18 21.02 12 17.77 5.82 21.02 7 14.14 2 9.27 8.91 8.26 12 2" />
@@ -84,7 +138,7 @@ function FavouritesPanel({ names, numbers }) {
           {count} favourite{count !== 1 ? 's' : ''}
         </span>
         <svg
-          className={`w-3 h-3 transition-transform ${open ? 'rotate-180' : ''}`}
+          className={`w-3 h-3 transition-transform ${isOpen ? 'rotate-180' : ''}`}
           fill="none"
           stroke="currentColor"
           viewBox="0 0 24 24"
@@ -94,35 +148,44 @@ function FavouritesPanel({ names, numbers }) {
         </svg>
       </button>
 
-      {open && (
-        <div
-          className="absolute bottom-full left-0 mb-2 w-72 max-w-[80vw] rounded-2xl border border-violet-500/20 shadow-xl z-30 overflow-hidden"
-          style={{ backgroundColor: '#1a1d2e' }}
-        >
-          <div className="px-4 py-2.5 border-b border-slate-700/40 flex items-center justify-between">
-            <span className="text-xs font-semibold text-violet-300 uppercase tracking-wider">
-              Chosen favourites
-            </span>
-            <span className="text-xs text-slate-600">{count}</span>
-          </div>
-          <ul className="max-h-60 overflow-y-auto py-1">
-            {list.map((name, idx) => (
-              <li
-                key={idx}
-                className="flex items-start gap-2.5 px-4 py-1.5 text-xs text-slate-300 hover:bg-white/5"
-              >
-                <span className="text-slate-700 flex-shrink-0 w-4 text-right">{idx + 1}</span>
-                <span className="flex-1 break-words leading-snug">{name}</span>
-              </li>
-            ))}
-          </ul>
-        </div>
-      )}
+      {isOpen &&
+        createPortal(
+          <div
+            ref={panelRef}
+            className="fixed rounded-2xl border border-violet-500/20 shadow-2xl z-[60] overflow-hidden"
+            style={{
+              backgroundColor: '#1a1d2e',
+              top: position?.top ?? -9999,
+              left: position?.left ?? -9999,
+              width: position?.width ?? 288,
+              visibility: position ? 'visible' : 'hidden',
+            }}
+          >
+            <div className="px-4 py-2.5 border-b border-slate-700/40 flex items-center justify-between">
+              <span className="text-xs font-semibold text-violet-300 uppercase tracking-wider">
+                Chosen favourites
+              </span>
+              <span className="text-xs text-slate-600">{count}</span>
+            </div>
+            <ul className="max-h-60 overflow-y-auto py-1">
+              {list.map((name, idx) => (
+                <li
+                  key={idx}
+                  className="flex items-start gap-2.5 px-4 py-1.5 text-xs text-slate-300 hover:bg-white/5"
+                >
+                  <span className="text-slate-700 flex-shrink-0 w-4 text-right">{idx + 1}</span>
+                  <span className="flex-1 break-words leading-snug">{name}</span>
+                </li>
+              ))}
+            </ul>
+          </div>,
+          document.body
+        )}
     </div>
   )
 }
 
-function SuggestionRow({ suggestion, onDelete }) {
+function SuggestionRow({ suggestion, namesMap, isPanelOpen, onPanelToggle, onDelete }) {
   const [confirm, setConfirm] = useState(false)
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState(null)
@@ -161,6 +224,9 @@ function SuggestionRow({ suggestion, onDelete }) {
         <FavouritesPanel
           names={suggestion.favoriteTrackNames}
           numbers={suggestion.favoriteTrackNumbers}
+          namesMap={namesMap}
+          isOpen={isPanelOpen}
+          onToggle={onPanelToggle}
         />
         {error && <p className="text-xs text-red-400 mt-1">{error}</p>}
       </div>
@@ -198,7 +264,7 @@ function SuggestionRow({ suggestion, onDelete }) {
   )
 }
 
-function PlaylistHistoryCard({ entry, onSuggestionDeleted, onPlaylistCleared }) {
+function PlaylistHistoryCard({ entry, openPanelId, onPanelToggle, onSuggestionDeleted, onPlaylistCleared }) {
   const isSpotify = entry.playlistUrl?.includes('spotify.com')
   const isYoutube =
     entry.playlistUrl?.includes('youtube.com') || entry.playlistUrl?.includes('youtu.be')
@@ -213,6 +279,34 @@ function PlaylistHistoryCard({ entry, onSuggestionDeleted, onPlaylistCleared }) 
 
   const [confirmClear, setConfirmClear] = useState(false)
   const [busy, setBusy] = useState(false)
+  const [namesMap, setNamesMap] = useState(null)
+
+  useEffect(() => {
+    const allNumbers = [
+      ...new Set(entry.suggestions.flatMap((s) => s.favoriteTrackNumbers || [])),
+    ]
+    if (!allNumbers.length) {
+      setNamesMap({})
+      return
+    }
+    let cancelled = false
+    api
+      .getTracks(entry.playlistId, allNumbers)
+      .then((tracks) => {
+        if (cancelled) return
+        const map = {}
+        for (const t of tracks || []) {
+          map[t.trackNumber] = `${t.trackName} — ${t.artistName}`
+        }
+        setNamesMap(map)
+      })
+      .catch(() => {
+        if (!cancelled) setNamesMap({})
+      })
+    return () => {
+      cancelled = true
+    }
+  }, [entry.playlistId, entry.suggestions])
 
   async function handleClear() {
     setBusy(true)
@@ -225,7 +319,7 @@ function PlaylistHistoryCard({ entry, onSuggestionDeleted, onPlaylistCleared }) 
     setBusy(false)
   }
 
-  const titleLabel = entry.playlistName?.trim() || truncateUrl(entry.playlistUrl)
+  const renamedName = entry.playlistName?.trim()
 
   return (
     <div
@@ -235,12 +329,17 @@ function PlaylistHistoryCard({ entry, onSuggestionDeleted, onPlaylistCleared }) 
       {/* Card header */}
       <div className="flex items-center justify-between px-5 py-3.5 border-b border-slate-700/40">
         <div className="flex items-center gap-3 min-w-0">
+          {renamedName && (
+            <span className="text-sm font-semibold text-slate-100 truncate">{renamedName}</span>
+          )}
           <span
             className={`inline-flex items-center px-2.5 py-1 rounded-full text-xs font-medium border flex-shrink-0 ${badgeClass}`}
           >
             {platform}
           </span>
-          <span className="text-xs text-slate-400 truncate font-medium">{titleLabel}</span>
+          <span className="text-xs text-slate-400 truncate font-medium">
+            {truncateUrl(entry.playlistUrl)}
+          </span>
         </div>
         <div className="flex items-center gap-3 flex-shrink-0 ml-3">
           <span className="text-xs text-slate-700">
@@ -261,6 +360,9 @@ function PlaylistHistoryCard({ entry, onSuggestionDeleted, onPlaylistCleared }) 
           <SuggestionRow
             key={s.id}
             suggestion={s}
+            namesMap={namesMap}
+            isPanelOpen={openPanelId === s.id}
+            onPanelToggle={(open) => onPanelToggle(open ? s.id : null)}
             onDelete={(id) => onSuggestionDeleted?.(entry.playlistId, id)}
           />
         ))}
@@ -286,6 +388,7 @@ export default function History() {
   const [history, setHistory] = useState([])
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState(null)
+  const [openPanelId, setOpenPanelId] = useState(null)
 
   async function load() {
     setLoading(true)
@@ -357,6 +460,8 @@ export default function History() {
             <PlaylistHistoryCard
               key={entry.playlistId}
               entry={entry}
+              openPanelId={openPanelId}
+              onPanelToggle={setOpenPanelId}
               onSuggestionDeleted={handleSuggestionDeleted}
               onPlaylistCleared={handlePlaylistCleared}
             />

@@ -353,13 +353,16 @@ public class PlaylistProcessingService
     public async Task<List<Playlist>> GetPlaylistsAsync() =>
         await _db.Playlists.OrderByDescending(p => p.ProcessedAt).ToListAsync();
 
-    public async Task<List<TrackMetadata>?> GetTracksAsync(int playlistId, int? trackNumber = null)
+    public async Task<List<TrackMetadata>?> GetTracksAsync(int playlistId, IReadOnlyCollection<int>? trackNumbers = null)
     {
         var exists = await _db.Playlists.AnyAsync(p => p.Id == playlistId);
         if (!exists) return null;
         var query = _db.TrackMetadatas.Where(t => t.PlaylistId == playlistId);
-        if (trackNumber.HasValue)
-            query = query.Where(t => t.TrackNumber == trackNumber.Value);
+        if (trackNumbers != null && trackNumbers.Count > 0)
+        {
+            var distinct = trackNumbers.Distinct().ToList();
+            query = query.Where(t => distinct.Contains(t.TrackNumber));
+        }
         return await query.OrderBy(t => t.TrackNumber).ToListAsync();
     }
 

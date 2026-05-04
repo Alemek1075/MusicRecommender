@@ -229,7 +229,8 @@ export default function PlaylistCard({ playlist, onRenamed, onDeleted }) {
     setBusy(false)
   }
 
-  const displayTitle = playlist.name?.trim() || truncateUrl(playlist.externalUrl)
+  const renamedName = playlist.name?.trim()
+  const displayTitle = renamedName || truncateUrl(playlist.externalUrl)
 
   return (
     <div
@@ -237,7 +238,12 @@ export default function PlaylistCard({ playlist, onRenamed, onDeleted }) {
       style={{ backgroundColor: '#131520' }}
     >
       <div className="flex items-center justify-between gap-2 mb-3">
-        <PlatformBadge url={playlist.externalUrl} />
+        <div className="flex items-center gap-2 min-w-0">
+          {renamedName && (
+            <span className="text-sm font-semibold text-slate-100 truncate">{renamedName}</span>
+          )}
+          <PlatformBadge url={playlist.externalUrl} />
+        </div>
         <div className="flex items-center gap-2 flex-shrink-0">
           <span className="text-slate-600 text-xs">{formatDate(playlist.processedAt)}</span>
           <div className="relative" ref={menuRef}>
@@ -287,11 +293,13 @@ export default function PlaylistCard({ playlist, onRenamed, onDeleted }) {
       </div>
 
       <div onClick={() => navigate(`/playlists/${playlist.id}`)} className="cursor-pointer">
-        <p className="text-slate-300 text-sm font-medium group-hover:text-slate-100 transition-colors break-all leading-relaxed">
-          {displayTitle}
-        </p>
-        {playlist.name?.trim() && (
-          <p className="text-xs text-slate-600 mt-1 break-all">{truncateUrl(playlist.externalUrl)}</p>
+        {!renamedName && (
+          <p className="text-slate-300 text-sm font-medium group-hover:text-slate-100 transition-colors break-all leading-relaxed">
+            {displayTitle}
+          </p>
+        )}
+        {renamedName && (
+          <p className="text-xs text-slate-600 break-all">{truncateUrl(playlist.externalUrl)}</p>
         )}
 
         <div className="flex items-center gap-1.5 mt-4">

@@ -24,7 +24,12 @@ export const api = {
 
   getPlaylists: () => request('/playlists'),
 
-  getTracks: (id) => request(`/playlists/${id}/tracks`),
+  getTracks: (id, trackNumbers = []) => {
+    if (!trackNumbers.length) return request(`/playlists/${id}/tracks`)
+    const params = new URLSearchParams()
+    trackNumbers.forEach((n) => params.append('trackNumbers', String(n)))
+    return request(`/playlists/${id}/tracks?${params}`)
+  },
 
   renamePlaylist: (id, name) =>
     request(`/playlists/${id}`, { method: 'PATCH', body: JSON.stringify({ name }) }),
