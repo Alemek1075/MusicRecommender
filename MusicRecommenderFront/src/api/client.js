@@ -36,8 +36,8 @@ export const api = {
 
   deletePlaylist: (id) => request(`/playlists/${id}`, { method: 'DELETE' }),
 
-  generateRecommendation: (playlistId, selectedTrackNumbers = []) => {
-    const params = new URLSearchParams({ playlistId: String(playlistId) })
+  generateRecommendation: (playlistId, selectedTrackNumbers = [], count = 1) => {
+    const params = new URLSearchParams({ playlistId: String(playlistId), count: String(count) })
     selectedTrackNumbers.forEach((n) => params.append('selectedTrackNumbers', String(n)))
     return request(`/recommendations/generate?${params}`)
   },

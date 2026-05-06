@@ -7,6 +7,7 @@ import { useImport } from '../context/ImportContext'
 
 function ImportModal({ onClose, onSuccess }) {
   const [url, setUrl] = useState('')
+  const [name, setName] = useState('')
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState(null)
   const [confirmInterrupt, setConfirmInterrupt] = useState(false)
@@ -23,6 +24,10 @@ function ImportModal({ onClose, onSuccess }) {
     abortRef.current = ctrl
     try {
       const result = await api.submitPlaylist(url.trim(), ctrl.signal)
+      if (name.trim()) {
+        const renamed = await api.renamePlaylist(result.playlist.id, name.trim())
+        result.playlist = { ...result.playlist, ...renamed }
+      }
       onSuccess(result)
     } catch (err) {
       if (err.name !== 'AbortError') setError(err.message)
@@ -98,6 +103,24 @@ function ImportModal({ onClose, onSuccess }) {
                 border: '1px solid rgba(255,255,255,0.07)',
               }}
               autoFocus
+              disabled={loading}
+            />
+          </div>
+
+          <div>
+            <label className="block text-xs font-medium text-slate-500 mb-2">
+              Name <span className="text-slate-700 font-normal">(optional)</span>
+            </label>
+            <input
+              type="text"
+              value={name}
+              onChange={(e) => setName(e.target.value)}
+              placeholder="My playlist"
+              className="w-full rounded-xl px-4 py-3 text-sm text-slate-200 placeholder-slate-600 focus:outline-none focus:ring-1 focus:ring-violet-500/50 transition-all"
+              style={{
+                backgroundColor: '#1a1d2e',
+                border: '1px solid rgba(255,255,255,0.07)',
+              }}
               disabled={loading}
             />
           </div>

@@ -127,8 +127,9 @@ public class PlaylistProcessingService
         throw new ArgumentException("URL must be a Spotify or YouTube playlist link.");
     }
 
-    public async Task<Recommendation> GenerateAsync(int playlistId, List<int> selectedTrackNumbers)
+    public async Task<List<Recommendation>> GenerateAsync(int playlistId, List<int> selectedTrackNumbers, int count = 1)
     {
+        count = Math.Clamp(count, 1, 20);
         // Deduplicate: same track ID submitted twice counts once
         selectedTrackNumbers = selectedTrackNumbers.Distinct().ToList();
 
@@ -150,22 +151,6 @@ public class PlaylistProcessingService
         var selectedSet = new HashSet<int>(selectedTrackNumbers);
         var rng = new Random();
 
-        // ── SEED TRACK ─────────────────────────────────────────────────────────
-        // If favorites were picked: the seed is ALWAYS one of them (uniform random).
-        // Otherwise: a uniform random pick from the whole playlist.
-        // This guarantees that selecting favorites visibly steers the result.
-        TrackMetadata seedTrack;
-        if (selectedSet.Count > 0)
-        {
-            var favTracks = tracks.Where(t => selectedSet.Contains(t.TrackNumber)).ToList();
-            seedTrack = favTracks[rng.Next(favTracks.Count)];
-        }
-        else
-        {
-            seedTrack = tracks[rng.Next(tracks.Count)];
-        }
-        bool seedIsFavorite = selectedSet.Contains(seedTrack.TrackNumber);
-
         // ── DEDUP SETS ─────────────────────────────────────────────────────────
         var pastRecs = await _db.Recommendations
             .Where(r => r.PlaylistId == playlistId)
@@ -176,124 +161,140 @@ public class PlaylistProcessingService
         foreach (var past in pastRecs)
             existingNormalized.Add(NormalizeTitle(past));
 
-        // ── SEARCH QUERIES ─────────────────────────────────────────────────────
-        // Build several distinct query variants and pick one randomly so consecutive
-        // calls don't keep hitting YouTube's identical top result for an identical query.
-        var queries = new List<string>();
-        if (seedIsFavorite)
+        var results = new List<Recommendation>();
+        var usedSeeds = new HashSet<int>();
+
+        for (int iter = 0; iter < count; iter++)
         {
-            // Favorite seed → personal: artist-driven AND genre-driven
-            if (seedTrack.Genre != null)
+            // ── SEED TRACK ─────────────────────────────────────────────────────
+            // Rotate through different seed tracks across iterations so each
+            // recommendation uses a distinct starting point where possible.
+            TrackMetadata seedTrack;
+            if (selectedSet.Count > 0)
             {
-                queries.Add($"{seedTrack.Genre} {seedTrack.ArtistName}");
-                queries.Add($"songs like {seedTrack.ArtistName}");
-                queries.Add($"{seedTrack.Genre} similar to {seedTrack.ArtistName}");
+                var favTracks = tracks.Where(t => selectedSet.Contains(t.TrackNumber)).ToList();
+                var unusedFavs = favTracks.Where(t => !usedSeeds.Contains(t.TrackNumber)).ToList();
+                var pool = unusedFavs.Count > 0 ? unusedFavs : favTracks;
+                seedTrack = pool[rng.Next(pool.Count)];
             }
             else
             {
-                queries.Add($"{seedTrack.ArtistName} similar songs");
-                queries.Add($"songs like {seedTrack.ArtistName}");
-                queries.Add($"artists similar to {seedTrack.ArtistName}");
+                var unused = tracks.Where(t => !usedSeeds.Contains(t.TrackNumber)).ToList();
+                var pool = unused.Count > 0 ? unused : tracks;
+                seedTrack = pool[rng.Next(pool.Count)];
             }
+            usedSeeds.Add(seedTrack.TrackNumber);
+            bool seedIsFavorite = selectedSet.Contains(seedTrack.TrackNumber);
 
-            // If multiple favorites are picked, mix in a second-favorite cross-query
-            // so two distinct selections produce distinct flavors.
-            if (selectedSet.Count > 1)
+            // ── SEARCH QUERIES ─────────────────────────────────────────────────
+            var queries = new List<string>();
+            if (seedIsFavorite)
             {
-                var others = tracks
-                    .Where(t => selectedSet.Contains(t.TrackNumber) && t.TrackNumber != seedTrack.TrackNumber)
-                    .ToList();
-                if (others.Count > 0)
+                if (seedTrack.Genre != null)
                 {
-                    var other = others[rng.Next(others.Count)];
-                    queries.Add($"{seedTrack.ArtistName} {other.ArtistName} similar");
-                    if (other.Genre != null && other.Genre != seedTrack.Genre)
-                        queries.Add($"{other.Genre} {seedTrack.ArtistName}");
+                    queries.Add($"{seedTrack.Genre} {seedTrack.ArtistName}");
+                    queries.Add($"songs like {seedTrack.ArtistName}");
+                    queries.Add($"{seedTrack.Genre} similar to {seedTrack.ArtistName}");
+                }
+                else
+                {
+                    queries.Add($"{seedTrack.ArtistName} similar songs");
+                    queries.Add($"songs like {seedTrack.ArtistName}");
+                    queries.Add($"artists similar to {seedTrack.ArtistName}");
+                }
+
+                if (selectedSet.Count > 1)
+                {
+                    var others = tracks
+                        .Where(t => selectedSet.Contains(t.TrackNumber) && t.TrackNumber != seedTrack.TrackNumber)
+                        .ToList();
+                    if (others.Count > 0)
+                    {
+                        var other = others[rng.Next(others.Count)];
+                        queries.Add($"{seedTrack.ArtistName} {other.ArtistName} similar");
+                        if (other.Genre != null && other.Genre != seedTrack.Genre)
+                            queries.Add($"{other.Genre} {seedTrack.ArtistName}");
+                    }
                 }
             }
-        }
-        else
-        {
-            // Non-favorite seed → broad discovery
-            if (seedTrack.Genre != null)
-            {
-                queries.Add($"best {seedTrack.Genre} music");
-                queries.Add($"top {seedTrack.Genre} songs");
-                queries.Add($"{seedTrack.Genre} hits");
-            }
             else
             {
-                queries.Add("popular music");
-                queries.Add($"songs like {seedTrack.ArtistName}");
+                if (seedTrack.Genre != null)
+                {
+                    queries.Add($"best {seedTrack.Genre} music");
+                    queries.Add($"top {seedTrack.Genre} songs");
+                    queries.Add($"{seedTrack.Genre} hits");
+                }
+                else
+                {
+                    queries.Add("popular music");
+                    queries.Add($"songs like {seedTrack.ArtistName}");
+                }
             }
-        }
-        var searchQuery = queries[rng.Next(queries.Count)];
+            var searchQuery = queries[rng.Next(queries.Count)];
 
-        var youtube = new YoutubeClient();
-        var scanned = 0;
+            // ── YOUTUBE SEARCH ─────────────────────────────────────────────────
+            var youtube = new YoutubeClient();
+            var scanned = 0;
+            var candidates = new List<(string Title, string Artist, string VideoId)>();
 
-        // Collect a pool of up to 12 valid candidates so we have meaningful variety
-        // when selecting. YouTube search results are popularity-ordered already; we
-        // pull deeper than the original 5 to give the random weighted draw something
-        // to choose from.
-        var candidates = new List<(string Title, string Artist, string VideoId)>();
-
-        await foreach (var result in youtube.Search.GetVideosAsync(searchQuery))
-        {
-            if (++scanned > 200) break;
-            if (result.Duration == null || result.Duration.Value.TotalMinutes > 15) continue;
-            var titleLower = result.Title.ToLowerInvariant();
-            if (titleLower.Contains("playlist") || titleLower.Contains("compilation") ||
-                titleLower.Contains("reaction") || titleLower.Contains(" | ")) continue;
-            var (artist, title) = ParseYouTubeTitle(result.Title, result.Author.ChannelTitle);
-            var cleanTitle = TitleSuffixPattern.Replace(title, "").Trim();
-            if (string.IsNullOrWhiteSpace(cleanTitle)) continue;
-            if (!IsDuplicateTitle(cleanTitle, existingNormalized))
+            await foreach (var result in youtube.Search.GetVideosAsync(searchQuery))
             {
-                candidates.Add((cleanTitle, artist, result.Id));
-                if (candidates.Count >= 12) break;
+                if (++scanned > 200) break;
+                if (result.Duration == null || result.Duration.Value.TotalMinutes > 15) continue;
+                var titleLower = result.Title.ToLowerInvariant();
+                if (titleLower.Contains("playlist") || titleLower.Contains("compilation") ||
+                    titleLower.Contains("reaction") || titleLower.Contains(" | ")) continue;
+                var (artist, title) = ParseYouTubeTitle(result.Title, result.Author.ChannelTitle);
+                var cleanTitle = TitleSuffixPattern.Replace(title, "").Trim();
+                if (string.IsNullOrWhiteSpace(cleanTitle)) continue;
+                if (!IsDuplicateTitle(cleanTitle, existingNormalized))
+                {
+                    candidates.Add((cleanTitle, artist, result.Id));
+                    if (candidates.Count >= 12) break;
+                }
             }
-        }
 
-        var recTitle = "No recommendation found";
-        var recArtist = seedTrack.ArtistName;
+            var recTitle = "No recommendation found";
+            var recArtist = seedTrack.ArtistName;
 
-        if (candidates.Count > 0)
-        {
-            var viewCounts = await Task.WhenAll(candidates.Select(async c =>
+            if (candidates.Count > 0)
             {
-                try { return (await youtube.Videos.GetAsync(c.VideoId)).Engagement.ViewCount; }
-                catch { return 0L; }
-            }));
+                var viewCounts = await Task.WhenAll(candidates.Select(async c =>
+                {
+                    try { return (await youtube.Videos.GetAsync(c.VideoId)).Engagement.ViewCount; }
+                    catch { return 0L; }
+                }));
 
-            // Weighted random draw biased by views (so popular still wins more often,
-            // but two consecutive runs produce different picks). Pure argmax made
-            // every call against the same query return the same video.
-            var weighted = candidates
-                .Select((c, i) => (c, weight: Math.Sqrt(Math.Max(viewCounts[i], 1L))))
-                .ToList();
-            double total = weighted.Sum(x => x.weight);
-            double roll = rng.NextDouble() * total;
-            var pick = weighted[^1].c;
-            foreach (var w in weighted)
-            {
-                roll -= w.weight;
-                if (roll <= 0) { pick = w.c; break; }
+                var weighted = candidates
+                    .Select((c, i) => (c, weight: Math.Sqrt(Math.Max(viewCounts[i], 1L))))
+                    .ToList();
+                double total = weighted.Sum(x => x.weight);
+                double roll = rng.NextDouble() * total;
+                var pick = weighted[^1].c;
+                foreach (var w in weighted)
+                {
+                    roll -= w.weight;
+                    if (roll <= 0) { pick = w.c; break; }
+                }
+                recTitle = pick.Title;
+                recArtist = pick.Artist;
             }
-            recTitle = pick.Title;
-            recArtist = pick.Artist;
+
+            var recommendation = new Recommendation
+            {
+                PlaylistId = playlistId,
+                FavoriteTrackNumbers = string.Join(",", selectedTrackNumbers),
+                SuggestedTrackName = recTitle,
+                SuggestedArtist = recArtist
+            };
+            _db.Recommendations.Add(recommendation);
+            existingNormalized.Add(NormalizeTitle(recTitle));
+            results.Add(recommendation);
         }
 
-        var recommendation = new Recommendation
-        {
-            PlaylistId = playlistId,
-            FavoriteTrackNumbers = string.Join(",", selectedTrackNumbers),
-            SuggestedTrackName = recTitle,
-            SuggestedArtist = recArtist
-        };
-        _db.Recommendations.Add(recommendation);
         await _db.SaveChangesAsync();
-        return recommendation;
+        return results;
     }
 
     public async Task<Playlist?> RenamePlaylistAsync(int id, string? name)

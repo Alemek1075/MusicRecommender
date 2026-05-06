@@ -8,6 +8,7 @@ import ErrorMessage from '../components/ErrorMessage'
 
 function ImportForm({ onSuccess }) {
   const [url, setUrl] = useState('')
+  const [name, setName] = useState('')
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState(null)
   const navigate = useNavigate()
@@ -19,6 +20,10 @@ function ImportForm({ onSuccess }) {
     setError(null)
     try {
       const result = await api.submitPlaylist(url.trim())
+      if (name.trim()) {
+        const renamed = await api.renamePlaylist(result.playlist.id, name.trim())
+        result.playlist = { ...result.playlist, ...renamed }
+      }
       onSuccess?.(result)
       navigate(`/playlists/${result.playlist.id}`)
     } catch (err) {
@@ -28,7 +33,7 @@ function ImportForm({ onSuccess }) {
   }
 
   return (
-    <form onSubmit={handleSubmit}>
+    <form onSubmit={handleSubmit} className="space-y-3">
       <div className="flex gap-3">
         <input
           type="text"
@@ -73,13 +78,26 @@ function ImportForm({ onSuccess }) {
         </button>
       </div>
 
+      <input
+        type="text"
+        value={name}
+        onChange={(e) => setName(e.target.value)}
+        placeholder="Playlist name (optional)"
+        className="w-full rounded-xl px-4 py-2.5 text-sm text-slate-200 placeholder-slate-600 focus:outline-none focus:ring-1 focus:ring-violet-500/50 transition-all"
+        style={{
+          backgroundColor: '#1a1d2e',
+          border: '1px solid rgba(255,255,255,0.06)',
+        }}
+        disabled={loading}
+      />
+
       {loading && (
-        <p className="mt-3 text-xs text-slate-500 text-center">
+        <p className="text-xs text-slate-500 text-center">
           Looking up track info — this can take up to a minute for large playlists…
         </p>
       )}
       {error && (
-        <div className="mt-3">
+        <div className="mt-1">
           <ErrorMessage message={error} />
         </div>
       )}

@@ -1,4 +1,5 @@
-import { useState, useEffect } from 'react'
+import { useState, useEffect, useRef } from 'react'
+import { createPortal } from 'react-dom'
 import { useParams, useNavigate } from 'react-router-dom'
 import { api } from '../api/client'
 import StatsGrid from '../components/StatsGrid'
@@ -86,9 +87,22 @@ export default function PlaylistDetail() {
   const [error, setError] = useState(null)
 
   const [selected, setSelected] = useState(new Set())
-  const [recommendation, setRecommendation] = useState(null)
+  const [recommendations, setRecommendations] = useState(null)
   const [recLoading, setRecLoading] = useState(false)
   const [recError, setRecError] = useState(null)
+  const [recCount, setRecCount] = useState(1)
+  const [showCountPicker, setShowCountPicker] = useState(false)
+  const countPickerRef = useRef(null)
+
+  const [badgeHovered, setBadgeHovered] = useState(false)
+  const badgeRef = useRef(null)
+  const [badgePos, setBadgePos] = useState(null)
+
+  function onBadgeEnter() {
+    const r = badgeRef.current?.getBoundingClientRect()
+    if (r) setBadgePos(r)
+    setBadgeHovered(true)
+  }
 
   useEffect(() => {
     async function load() {
@@ -118,14 +132,25 @@ export default function PlaylistDetail() {
   }
 
   const allSelected = tracks.length > 0 && selected.size === tracks.length
+  const maxCount = Math.max(1, Math.floor(tracks.length * 0.2))
+
+  useEffect(() => {
+    if (!showCountPicker) return
+    function handler(e) {
+      if (countPickerRef.current?.contains(e.target)) return
+      setShowCountPicker(false)
+    }
+    document.addEventListener('mousedown', handler)
+    return () => document.removeEventListener('mousedown', handler)
+  }, [showCountPicker])
 
   async function generateRec() {
     setRecLoading(true)
     setRecError(null)
-    setRecommendation(null)
+    setRecommendations(null)
     try {
-      const rec = await api.generateRecommendation(parseInt(id, 10), [...selected])
-      setRecommendation(rec)
+      const recs = await api.generateRecommendation(parseInt(id, 10), [...selected], recCount)
+      setRecommendations(Array.isArray(recs) ? recs : [recs])
     } catch (err) {
       setRecError(err.message)
     }
@@ -171,10 +196,11 @@ export default function PlaylistDetail() {
       {stats && stats.totalTracks > 0 && <StatsGrid stats={stats} />}
 
       {/* Recommendation */}
-      {recommendation && (
+      {recommendations && (
         <RecommendationResult
-          recommendation={recommendation}
-          onDismiss={() => setRecommendation(null)}
+          recommendations={recommendations}
+          onDismiss={() => setRecommendations(null)}
+          tracks={tracks}
         />
       )}
       {recError && <ErrorMessage message={recError} />}
@@ -189,49 +215,140 @@ export default function PlaylistDetail() {
           <div className="flex items-center gap-3">
             <span className="text-sm font-semibold text-slate-200">Tracks</span>
             {selected.size > 0 && (
-              <span className="text-xs px-2 py-0.5 rounded-full bg-violet-500/15 text-violet-300 border border-violet-500/20">
-                {selected.size} selected
-              </span>
+              <div
+                ref={badgeRef}
+                className="relative"
+                onMouseEnter={onBadgeEnter}
+                onMouseLeave={() => setBadgeHovered(false)}
+              >
+                <span className="text-xs px-2 py-0.5 rounded-full bg-violet-500/15 text-violet-300 border border-violet-500/20 cursor-default">
+                  {selected.size} selected
+                </span>
+                {badgeHovered && badgePos && createPortal(
+                  <div
+                    className="fixed z-50 rounded-xl border border-violet-500/20 shadow-2xl overflow-hidden pointer-events-none"
+                    style={{
+                      backgroundColor: '#1a1d2e',
+                      minWidth: '180px',
+                      maxWidth: '260px',
+                      top: badgePos.top - 8,
+                      left: badgePos.left,
+                      transform: 'translateY(-100%)',
+                    }}
+                  >
+                    <div className="px-3 py-2 border-b border-slate-700/40">
+                      <span className="text-xs font-semibold text-violet-300 uppercase tracking-wider">Selected</span>
+                    </div>
+                    <ul className="py-1 max-h-48 overflow-y-auto">
+                      {tracks
+                        .filter((t) => selected.has(t.trackNumber))
+                        .map((t) => (
+                          <li key={t.trackNumber} className="flex items-center gap-2 px-3 py-1.5 text-xs">
+                            <span className="text-slate-600 w-4 text-right flex-shrink-0">{t.trackNumber}</span>
+                            <span className="text-slate-300 flex-1 truncate">{t.trackName}</span>
+                          </li>
+                        ))}
+                    </ul>
+                  </div>,
+                  document.body
+                )}
+              </div>
             )}
           </div>
 
           <div className="flex items-center gap-2">
             <button
               onClick={() =>
-                allSelected
+                selected.size > 0
                   ? setSelected(new Set())
                   : setSelected(new Set(tracks.map((t) => t.trackNumber)))
               }
               className="text-xs text-slate-500 hover:text-slate-300 px-3 py-1.5 rounded-lg hover:bg-white/5 transition-all"
             >
-              {allSelected ? 'Clear all' : 'Select all'}
+              {selected.size > 0 ? 'Clear' : 'Select all'}
             </button>
 
-            <button
-              onClick={generateRec}
-              disabled={recLoading}
-              className="flex items-center gap-2 px-4 py-2 rounded-xl bg-violet-600 hover:bg-violet-500 disabled:opacity-60 disabled:cursor-not-allowed text-white text-xs font-semibold transition-all"
-            >
-              {recLoading ? (
-                <>
-                  <div className="w-3.5 h-3.5 animate-spin rounded-full border-2 border-white/25 border-t-white" />
-                  Generating…
-                </>
-              ) : (
-                <>
+            {/* Split button: action + count picker */}
+            <div className="flex items-stretch rounded-xl bg-violet-600 overflow-visible">
+              {/* Main action */}
+              <button
+                onClick={generateRec}
+                disabled={recLoading}
+                className="flex items-center gap-2 pl-4 pr-3 py-2 rounded-l-xl hover:bg-violet-500 disabled:opacity-60 disabled:cursor-not-allowed text-white text-xs font-semibold transition-all"
+              >
+                {recLoading ? (
+                  <>
+                    <div className="w-3.5 h-3.5 animate-spin rounded-full border-2 border-white/25 border-t-white" />
+                    Generating…
+                  </>
+                ) : (
+                  <>
+                    <svg
+                      className="w-3.5 h-3.5"
+                      fill="none"
+                      stroke="currentColor"
+                      viewBox="0 0 24 24"
+                      strokeWidth="2"
+                    >
+                      <polygon points="12 2 15.09 8.26 22 9.27 17 14.14 18.18 21.02 12 17.77 5.82 21.02 7 14.14 2 9.27 8.91 8.26 12 2" />
+                    </svg>
+                    Get Recommendation{recCount > 1 ? 's' : ''}
+                  </>
+                )}
+              </button>
+
+              {/* Separator */}
+              <div className="w-px bg-white/20 my-1.5 flex-shrink-0" />
+
+              {/* Count picker trigger */}
+              <div className="relative" ref={countPickerRef}>
+                <button
+                  onClick={() => setShowCountPicker((v) => !v)}
+                  disabled={recLoading}
+                  className="flex items-center gap-1 px-2.5 py-2 rounded-r-xl hover:bg-violet-500 disabled:opacity-60 text-white text-xs font-semibold transition-all h-full"
+                  title="Number of recommendations"
+                >
+                  <span className="tabular-nums w-3 text-center">{recCount}</span>
                   <svg
-                    className="w-3.5 h-3.5"
+                    className={`w-3 h-3 transition-transform ${showCountPicker ? 'rotate-180' : ''}`}
                     fill="none"
                     stroke="currentColor"
                     viewBox="0 0 24 24"
-                    strokeWidth="2"
+                    strokeWidth="2.5"
                   >
-                    <polygon points="12 2 15.09 8.26 22 9.27 17 14.14 18.18 21.02 12 17.77 5.82 21.02 7 14.14 2 9.27 8.91 8.26 12 2" />
+                    <polyline
+                      points="6 9 12 15 18 9"
+                      strokeLinecap="round"
+                      strokeLinejoin="round"
+                    />
                   </svg>
-                  Get Recommendation
-                </>
-              )}
-            </button>
+                </button>
+
+                {showCountPicker && (
+                  <div
+                    className="absolute right-0 top-full mt-1.5 z-50 rounded-xl border border-violet-500/25 shadow-2xl overflow-hidden py-1"
+                    style={{ backgroundColor: '#1a1d2e', minWidth: '56px' }}
+                  >
+                    {Array.from({ length: maxCount }, (_, i) => i + 1).map((n) => (
+                      <button
+                        key={n}
+                        onClick={() => {
+                          setRecCount(n)
+                          setShowCountPicker(false)
+                        }}
+                        className={`w-full px-3 py-1.5 text-xs text-center transition-colors ${
+                          recCount === n
+                            ? 'bg-violet-500/20 text-violet-300'
+                            : 'text-slate-400 hover:bg-white/5 hover:text-slate-200'
+                        }`}
+                      >
+                        {n}
+                      </button>
+                    ))}
+                  </div>
+                )}
+              </div>
+            </div>
           </div>
         </div>
 
