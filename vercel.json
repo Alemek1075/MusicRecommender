@@ -4,6 +4,7 @@
   "installCommand": "npm install && npm --prefix MusicRecommenderFront install",
   "framework": null,
   "rewrites": [
+    { "source": "/api/:path*", "destination": "https://pas-shoulder-released-prefix.trycloudflare.com/api/:path*" },
     { "source": "/(.*)", "destination": "/index.html" }
   ]
 }
