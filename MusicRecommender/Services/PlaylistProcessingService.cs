@@ -4,6 +4,7 @@ using MusicRecommender.Data;
 using MusicRecommender.Models;
 using SpotifyAPI.Web;
 using System.Globalization;
+using System.Net;
 using System.Text.Json;
 using System.Text.RegularExpressions;
 using YoutubeExplode;
@@ -505,27 +506,42 @@ public class PlaylistProcessingService
         SpotifyClient spotify;
         if (hasCredentials)
         {
-            var cfg = SpotifyClientConfig.CreateDefault()
-                .WithAuthenticator(new ClientCredentialsAuthenticator(clientId!, clientSecret!));
-            spotify = new SpotifyClient(cfg);
+            try
+            {
+                var token = await new OAuthClient().RequestToken(
+                    new ClientCredentialsRequest(clientId!, clientSecret!));
+                var cfg = SpotifyClientConfig.CreateDefault()
+                    .WithToken(token.AccessToken, token.TokenType ?? "Bearer");
+                spotify = new SpotifyClient(cfg);
+            }
+            catch (APIException ex)
+            {
+                throw new InvalidOperationException(
+                    $"Spotify rejected the configured API credentials. {FormatSpotifyApiError(ex)}", ex);
+            }
         }
         else
         {
             var anonToken = await GetSpotifyAnonymousTokenAsync();
             if (string.IsNullOrWhiteSpace(anonToken))
                 throw new InvalidOperationException("Could not connect to Spotify. Set Spotify:ClientId and Spotify:ClientSecret in appsettings.json for reliable access.");
-            spotify = new SpotifyClient(SpotifyClientConfig.CreateDefault().WithToken(anonToken));
+            spotify = new SpotifyClient(SpotifyClientConfig.CreateDefault().WithToken(anonToken, "Bearer"));
         }
 
-        var spotifyPlaylist = await spotify.Playlists.Get(playlistId);
-        if (spotifyPlaylist.Items == null)
-            throw new InvalidOperationException("Could not retrieve tracks from the Spotify playlist.");
-
         var rawTracks = new List<(string Name, string Artist, int DurationMs)>();
-        await foreach (var item in spotify.Paginate(spotifyPlaylist.Items))
+        try
         {
-            if (item.Track is FullTrack fullTrack)
-                rawTracks.Add((fullTrack.Name, fullTrack.Artists.FirstOrDefault()?.Name ?? "Unknown", fullTrack.DurationMs));
+            var spotifyPlaylistItems = await spotify.Playlists.GetPlaylistItems(playlistId);
+            await foreach (var item in spotify.Paginate(spotifyPlaylistItems))
+            {
+                if (item.Track is FullTrack fullTrack)
+                    rawTracks.Add((fullTrack.Name, fullTrack.Artists.FirstOrDefault()?.Name ?? "Unknown", fullTrack.DurationMs));
+            }
+        }
+        catch (APIException ex)
+        {
+            throw new InvalidOperationException(
+                $"Could not access that Spotify playlist. {FormatSpotifyApiError(ex)}", ex);
         }
 
         if (rawTracks.Count == 0)
@@ -566,6 +582,21 @@ public class PlaylistProcessingService
         var trackList = playlist.Tracks.ToList();
         var stats = new PlaylistStats(topGenre, topArtist, trackList.Count, (int)totalDuration.TotalHours, totalDuration.Minutes);
         return new PlaylistProcessingResult(playlist, stats);
+    }
+
+    private static string FormatSpotifyApiError(APIException ex)
+    {
+        var status = ex.Response?.StatusCode;
+        return status switch
+        {
+            HttpStatusCode.BadRequest => "Spotify returned 400 Bad Request.",
+            HttpStatusCode.Unauthorized => "Spotify returned 401 Unauthorized. Reading playlist items may require a user-authorized Spotify token, not only app client credentials.",
+            HttpStatusCode.Forbidden => "Spotify returned 403 Forbidden. The playlist may be private or unavailable to this app.",
+            HttpStatusCode.NotFound => "Spotify returned 404 Not Found. The playlist may be private, personalized, region-limited, or not available through the Spotify Web API.",
+            HttpStatusCode.TooManyRequests => "Spotify returned 429 Too Many Requests. Please wait a bit and try again.",
+            null => "Spotify returned an unknown API error.",
+            _ => $"Spotify returned {(int)status.Value} {status.Value}."
+        };
     }
 
     private static (string Artist, string Title) ParseYouTubeTitle(string videoTitle, string channelTitle)
