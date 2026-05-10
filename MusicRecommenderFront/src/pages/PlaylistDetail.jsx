@@ -7,14 +7,27 @@ import RecommendationResult from '../components/RecommendationResult'
 import LoadingSpinner from '../components/LoadingSpinner'
 import ErrorMessage from '../components/ErrorMessage'
 
+/**
+ * Converts millisecond durations from the backend into the M:SS format used in track rows.
+ */
 function formatMs(ms) {
+  // Convert total milliseconds into whole minutes.
   const min = Math.floor(ms / 60000)
+
+  // Convert the remainder into seconds.
   const sec = Math.floor((ms % 60000) / 1000)
+
+  // Pad seconds so durations render like 3:07 instead of 3:7.
   return `${min}:${sec.toString().padStart(2, '0')}`
 }
 
+/**
+ * Clickable track row. It shows metadata and selection state, then delegates toggle behavior to
+ * the parent so the selected Set remains centralized.
+ */
 function TrackRow({ track, selected, onToggle }) {
   return (
+    /* One selectable track row. */
     <div
       onClick={() => onToggle(track.trackNumber)}
       className={`flex items-center gap-3.5 px-4 py-3 rounded-xl cursor-pointer transition-all select-none group ${
@@ -76,89 +89,174 @@ function TrackRow({ track, selected, onToggle }) {
   )
 }
 
+/**
+ * Playlist detail and recommendation workspace. Users can select favourite tracks, choose how many
+ * suggestions to request, generate recommendations, and inspect imported track metadata.
+ */
 export default function PlaylistDetail() {
+  // Playlist ID comes from /playlists/:id.
   const { id } = useParams()
+
+  // Navigation is used for the back button and error fallback.
   const navigate = useNavigate()
 
+  // Imported track rows for this playlist.
   const [tracks, setTracks] = useState([])
+
+  // Scoped stats for this playlist.
   const [stats, setStats] = useState(null)
+
+  // Playlist metadata, mainly custom display name.
   const [playlist, setPlaylist] = useState(null)
+
+  // Page-level loading/error state.
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState(null)
 
+  // Set of selected favourite track numbers.
   const [selected, setSelected] = useState(new Set())
+
+  // Latest generated recommendation batch.
   const [recommendations, setRecommendations] = useState(null)
+
+  // Recommendation request loading/error state.
   const [recLoading, setRecLoading] = useState(false)
   const [recError, setRecError] = useState(null)
+
+  // Number of recommendations to request in one batch.
   const [recCount, setRecCount] = useState(1)
+
+  // Controls the count dropdown.
   const [showCountPicker, setShowCountPicker] = useState(false)
   const countPickerRef = useRef(null)
 
+  // Hover state for the selected-tracks badge tooltip.
   const [badgeHovered, setBadgeHovered] = useState(false)
   const badgeRef = useRef(null)
   const [badgePos, setBadgePos] = useState(null)
 
+  /**
+   * Captures the badge position before showing the selected-tracks tooltip, because the tooltip is
+   * rendered through a portal and needs viewport coordinates.
+   */
   function onBadgeEnter() {
+    // Measure the badge before rendering the portal tooltip.
     const r = badgeRef.current?.getBoundingClientRect()
+
+    // Store coordinates only when the DOM node exists.
     if (r) setBadgePos(r)
+
+    // Show the tooltip.
     setBadgeHovered(true)
   }
 
+  // Load tracks, scoped statistics, and playlist display metadata together for the detail view.
   useEffect(() => {
+    /**
+     * Fetches all data required for the detail page. Playlist metadata is read from the playlist
+     * list because there is no dedicated "get playlist by id" endpoint yet.
+     */
     async function load() {
       try {
+        // Fetch tracks, stats, and playlist list concurrently.
         const [t, s, all] = await Promise.all([
           api.getTracks(id),
           api.getStatistics([parseInt(id, 10)]),
           api.getPlaylists(),
         ])
+
+        // Store track rows for the table.
         setTracks(t || [])
+
+        // Store scoped statistics.
         setStats(s)
+
+        // Find this playlist's metadata from the list response.
         setPlaylist((all || []).find((p) => p.id === parseInt(id, 10)) || null)
       } catch (err) {
+        // Capture any failed request as a page error.
         setError(err.message)
       }
+
+      // Finish initial loading.
       setLoading(false)
     }
     load()
   }, [id])
 
+  /**
+   * Toggles one track number inside a Set while preserving React state immutability.
+   */
   function toggleTrack(num) {
+    // Use functional state so rapid clicks compose correctly.
     setSelected((prev) => {
+      // Clone the Set because React state should not be mutated in place.
       const next = new Set(prev)
+
+      // Toggle the requested track number.
       next.has(num) ? next.delete(num) : next.add(num)
+
+      // Return the updated selection.
       return next
     })
   }
 
+  // Recommendation count is capped at 20% of the playlist so batch generation stays reasonable.
+  // allSelected is available for future UI behavior and documents the full-selection state.
   const allSelected = tracks.length > 0 && selected.size === tracks.length
+
+  // At least one recommendation is always allowed.
   const maxCount = Math.max(1, Math.floor(tracks.length * 0.2))
 
+  // Close the recommendation-count menu when the user clicks outside it.
   useEffect(() => {
     if (!showCountPicker) return
+    /**
+     * Closes the count picker unless the click happened inside the picker wrapper.
+     */
     function handler(e) {
+      // Ignore clicks inside the picker.
       if (countPickerRef.current?.contains(e.target)) return
+
+      // Close the dropdown on outside clicks.
       setShowCountPicker(false)
     }
+
+    // Register the outside-click listener while the picker is open.
     document.addEventListener('mousedown', handler)
+
+    // Remove the listener on close/unmount.
     return () => document.removeEventListener('mousedown', handler)
   }, [showCountPicker])
 
+  /**
+   * Calls the backend recommendation endpoint with the current favourite selection and requested
+   * count, then normalizes the response to an array for RecommendationResult.
+   */
   async function generateRec() {
+    // Show recommendation spinner and clear previous result/error.
     setRecLoading(true)
     setRecError(null)
     setRecommendations(null)
     try {
+      // Send selected track numbers as favourite seeds.
       const recs = await api.generateRecommendation(parseInt(id, 10), [...selected], recCount)
+
+      // Backend returns an array, but normalize defensively.
       setRecommendations(Array.isArray(recs) ? recs : [recs])
     } catch (err) {
+      // Show recommendation-specific failure without losing the playlist page.
       setRecError(err.message)
     }
+
+    // Hide recommendation spinner.
     setRecLoading(false)
   }
 
+  // Initial loading state for the entire detail page.
   if (loading) return <LoadingSpinner className="py-24" size="lg" />
 
+  // If initial data failed, show an error with a button back to playlists.
   if (error)
     return (
       <div className="py-8 max-w-lg">

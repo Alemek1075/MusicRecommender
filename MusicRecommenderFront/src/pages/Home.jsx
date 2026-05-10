@@ -6,35 +6,67 @@ import PlaylistCard from '../components/PlaylistCard'
 import LoadingSpinner from '../components/LoadingSpinner'
 import ErrorMessage from '../components/ErrorMessage'
 
+/**
+ * Homepage import form. It creates the playlist, optionally applies a custom display name, then
+ * redirects the user to the new playlist detail page.
+ */
 function ImportForm({ onSuccess }) {
+  // URL input stores the playlist source to import.
   const [url, setUrl] = useState('')
+
+  // Optional friendly name applied after import succeeds.
   const [name, setName] = useState('')
+
+  // Loading disables form controls during backend processing.
   const [loading, setLoading] = useState(false)
+
+  // Error stores user-facing backend/network failures.
   const [error, setError] = useState(null)
+
+  // Used to jump to the created playlist after import.
   const navigate = useNavigate()
 
+  /**
+   * Submits the entered playlist URL to the backend and chains the optional rename request after
+   * the playlist exists.
+   */
   async function handleSubmit(e) {
+    // Prevent browser form submission.
     e.preventDefault()
+
+    // Ignore blank URLs.
     if (!url.trim()) return
+
+    // Lock the form and clear stale errors.
     setLoading(true)
     setError(null)
     try {
+      // Import the playlist through the backend.
       const result = await api.submitPlaylist(url.trim())
+
+      // Apply optional display name only after the playlist has an ID.
       if (name.trim()) {
         const renamed = await api.renamePlaylist(result.playlist.id, name.trim())
         result.playlist = { ...result.playlist, ...renamed }
       }
+
+      // Allow parent page to refresh local dashboard state if it wants to.
       onSuccess?.(result)
+
+      // Move directly into the track-selection/detail workflow.
       navigate(`/playlists/${result.playlist.id}`)
     } catch (err) {
+      // Show the backend/network error and re-enable the form.
       setError(err.message)
       setLoading(false)
     }
   }
 
   return (
+    /* Homepage import form. */
     <form onSubmit={handleSubmit} className="space-y-3">
       <div className="flex gap-3">
+        {/* Playlist URL input. */}
         <input
           type="text"
           value={url}
@@ -47,6 +79,7 @@ function ImportForm({ onSuccess }) {
           }}
           disabled={loading}
         />
+        {/* Import button shows a spinner while the backend analyzes the playlist. */}
         <button
           type="submit"
           disabled={loading || !url.trim()}
@@ -78,6 +111,7 @@ function ImportForm({ onSuccess }) {
         </button>
       </div>
 
+      {/* Optional name input, saved only if non-empty. */}
       <input
         type="text"
         value={name}
@@ -91,11 +125,13 @@ function ImportForm({ onSuccess }) {
         disabled={loading}
       />
 
+      {/* Long imports get a progress hint. */}
       {loading && (
         <p className="text-xs text-slate-500 text-center">
           Looking up track info — this can take up to a minute for large playlists…
         </p>
       )}
+      {/* Backend/import errors appear below the form. */}
       {error && (
         <div className="mt-1">
           <ErrorMessage message={error} />
@@ -105,18 +141,34 @@ function ImportForm({ onSuccess }) {
   )
 }
 
+/**
+ * Landing/dashboard page. It combines the primary import workflow, library statistics, and a few
+ * recent playlist cards for quick re-entry.
+ */
 export default function Home() {
+  // Whole-library statistics shown below the hero when available.
   const [stats, setStats] = useState(null)
+
+  // Recent playlist list for the dashboard cards.
   const [playlists, setPlaylists] = useState([])
+
+  // Initial dashboard loading state.
   const [loading, setLoading] = useState(true)
 
+  // Load dashboard data in parallel because stats and playlists are independent API calls.
   useEffect(() => {
+    /**
+     * Fetches dashboard statistics and recent playlists. Errors are intentionally swallowed here
+     * because the homepage can still show the import form without dashboard data.
+     */
     async function load() {
       try {
+        // Stats and playlists do not depend on each other, so fetch them together.
         const [s, p] = await Promise.all([api.getStatistics(), api.getPlaylists()])
         setStats(s)
         setPlaylists(p || [])
       } catch {}
+      // Always stop the loading spinner, even if dashboard data fails.
       setLoading(false)
     }
     load()

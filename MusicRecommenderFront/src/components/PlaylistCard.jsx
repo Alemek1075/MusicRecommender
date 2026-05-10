@@ -3,7 +3,11 @@ import { createPortal } from 'react-dom'
 import { useNavigate } from 'react-router-dom'
 import { api } from '../api/client'
 
+/**
+ * Formats the backend UTC timestamp into the short date shown on playlist cards.
+ */
 function formatDate(dateStr) {
+  // Convert ISO/UTC date strings into a stable short US date label.
   return new Date(dateStr).toLocaleDateString('en-US', {
     month: 'short',
     day: 'numeric',
@@ -11,12 +15,22 @@ function formatDate(dateStr) {
   })
 }
 
+/**
+ * Shortens long playlist URLs so cards remain scannable while still revealing the source.
+ */
 function truncateUrl(url, max = 52) {
+  // Nothing to truncate when URL is empty or already short.
   if (!url || url.length <= max) return url
+
+  // Add ellipsis after slicing to the maximum card-friendly length.
   return url.slice(0, max) + '…'
 }
 
+/**
+ * Renders the platform badge by inspecting the original external URL.
+ */
 function PlatformBadge({ url }) {
+  // Spotify playlist URLs get a green platform badge.
   if (url?.includes('spotify.com')) {
     return (
       <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-medium bg-green-500/12 text-green-400 border border-green-500/20">
@@ -27,6 +41,7 @@ function PlatformBadge({ url }) {
       </span>
     )
   }
+  // YouTube playlist/short URLs get a red platform badge.
   if (url?.includes('youtube.com') || url?.includes('youtu.be')) {
     return (
       <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-medium bg-red-500/12 text-red-400 border border-red-500/20">
@@ -37,27 +52,44 @@ function PlatformBadge({ url }) {
       </span>
     )
   }
+  // Unknown source gets no badge.
   return null
 }
 
+/**
+ * Modal used to add, update, or clear a playlist display name. It portals to document.body so it
+ * is not clipped by card/grid containers.
+ */
 function RenameModal({ initialName, onClose, onSave, busy, error }) {
+  // Local input state starts from the playlist's current display name.
   const [value, setValue] = useState(initialName || '')
 
+  /**
+   * Closes the modal when the user clicks the backdrop, but not when they click inside the dialog.
+   */
   function handleBackdrop(e) {
     if (e.target === e.currentTarget) onClose()
   }
 
+  /**
+   * Sends trimmed text to the parent. An empty value becomes null to clear the backend name field.
+   */
   function handleSubmit(e) {
+    // Keep the form from refreshing the page.
     e.preventDefault()
+
+    // Save trimmed text, or null when the user clears the input.
     onSave(value.trim() || null)
   }
 
   return createPortal(
+    /* Overlay catches backdrop clicks and visually isolates the modal. */
     <div
       className="fixed inset-0 z-50 flex items-center justify-center p-4"
       style={{ backgroundColor: 'rgba(0,0,0,0.7)', backdropFilter: 'blur(8px)' }}
       onClick={handleBackdrop}
     >
+      {/* Stop clicks inside the dialog from bubbling to the backdrop. */}
       <div
         className="w-full max-w-lg rounded-3xl border border-violet-500/20 p-8 shadow-2xl"
         style={{
@@ -65,6 +97,7 @@ function RenameModal({ initialName, onClose, onSave, busy, error }) {
         }}
         onClick={(e) => e.stopPropagation()}
       >
+        {/* Dialog header with edit icon and title. */}
         <div className="flex items-center gap-3 mb-1">
           <div className="w-10 h-10 rounded-2xl bg-violet-500/15 flex items-center justify-center">
             <svg
@@ -92,6 +125,7 @@ function RenameModal({ initialName, onClose, onSave, busy, error }) {
           Give this playlist a custom display name. Leave the field blank to revert to the URL.
         </p>
 
+        {/* Rename form posts through handleSubmit. */}
         <form onSubmit={handleSubmit} className="space-y-4">
           <div>
             <label className="block text-xs font-medium text-slate-500 mb-2 uppercase tracking-wide">
@@ -110,12 +144,14 @@ function RenameModal({ initialName, onClose, onSave, busy, error }) {
           </div>
 
           {error && (
+            /* Inline backend error area shown if rename fails. */
             <div className="rounded-xl border border-red-500/30 bg-red-500/10 px-4 py-3">
               <p className="text-xs font-semibold text-red-300 mb-1">Couldn't save</p>
               <p className="text-xs text-red-200/80 break-words">{error}</p>
             </div>
           )}
 
+          {/* Modal actions. */}
           <div className="flex gap-3 pt-2">
             <button
               type="button"
@@ -143,16 +179,24 @@ function RenameModal({ initialName, onClose, onSave, busy, error }) {
   )
 }
 
+/**
+ * Generic confirmation dialog for destructive card actions.
+ */
 function ConfirmModal({ title, message, confirmLabel = 'Delete', danger = true, onClose, onConfirm, busy }) {
+  /**
+   * Treats a click on the overlay as cancel, while preserving clicks inside the dialog body.
+   */
   function handleBackdrop(e) {
     if (e.target === e.currentTarget) onClose()
   }
   return createPortal(
+    /* Confirmation overlay. */
     <div
       className="fixed inset-0 z-50 flex items-center justify-center p-4"
       style={{ backgroundColor: 'rgba(0,0,0,0.65)', backdropFilter: 'blur(6px)' }}
       onClick={handleBackdrop}
     >
+      {/* Dialog content stops click propagation to avoid accidental cancel. */}
       <div
         className="w-full max-w-md rounded-2xl border border-slate-700/60 p-6 shadow-2xl"
         style={{ backgroundColor: '#131520' }}
@@ -160,6 +204,7 @@ function ConfirmModal({ title, message, confirmLabel = 'Delete', danger = true, 
       >
         <h2 className="text-base font-semibold text-slate-100 mb-2">{title}</h2>
         <p className="text-sm text-slate-500 mb-5">{message}</p>
+        {/* Cancel and confirm actions. */}
         <div className="flex gap-3">
           <button
             type="button"
@@ -186,8 +231,15 @@ function ConfirmModal({ title, message, confirmLabel = 'Delete', danger = true, 
   )
 }
 
+/**
+ * Playlist summary card used on Home and Playlists. It owns the rename/delete menus and delegates
+ * parent state updates through optional callbacks.
+ */
 export default function PlaylistCard({ playlist, onRenamed, onDeleted }) {
+  // Router navigation opens the playlist detail page from the card body.
   const navigate = useNavigate()
+
+  // Menu/modal/busy/error state is local to each card instance.
   const [menuOpen, setMenuOpen] = useState(false)
   const [showRename, setShowRename] = useState(false)
   const [showDelete, setShowDelete] = useState(false)
@@ -195,7 +247,11 @@ export default function PlaylistCard({ playlist, onRenamed, onDeleted }) {
   const [error, setError] = useState(null)
   const menuRef = useRef(null)
 
+  // Close the overflow menu when the user clicks elsewhere.
   useEffect(() => {
+    /**
+     * Document-level click handler used only while the menu is open.
+     */
     function handler(e) {
       if (menuRef.current && !menuRef.current.contains(e.target)) setMenuOpen(false)
     }
@@ -203,52 +259,81 @@ export default function PlaylistCard({ playlist, onRenamed, onDeleted }) {
     return () => document.removeEventListener('mousedown', handler)
   }, [menuOpen])
 
+  /**
+   * Persists a new custom playlist name and informs the parent list about the updated entity.
+   */
   async function handleRename(name) {
+    // Mark modal action as busy and clear any previous error.
     setBusy(true)
     setError(null)
     try {
+      // Persist the name change.
       const updated = await api.renamePlaylist(playlist.id, name)
+
+      // Let parent lists merge the updated playlist.
       onRenamed?.(updated)
+
+      // Close the rename modal after success.
       setShowRename(false)
     } catch (err) {
+      // Show backend/network failure in the modal.
       setError(err.message)
     }
+
+    // Re-enable modal controls.
     setBusy(false)
   }
 
+  /**
+   * Deletes the playlist, then lets the parent remove the card from its local collection.
+   */
   async function handleDelete() {
+    // Mark delete action as busy and clear stale errors.
     setBusy(true)
     setError(null)
     try {
+      // Delete playlist through the backend API.
       await api.deletePlaylist(playlist.id)
+
+      // Remove the card from parent state.
       onDeleted?.(playlist.id)
+
+      // Close the confirmation modal.
       setShowDelete(false)
     } catch (err) {
+      // Store failure so the card can surface it if needed.
       setError(err.message)
     }
+
+    // Re-enable modal controls.
     setBusy(false)
   }
 
+  // Custom names take precedence; otherwise the URL itself becomes the display title.
   const renamedName = playlist.name?.trim()
   const displayTitle = renamedName || truncateUrl(playlist.externalUrl)
 
   return (
+    /* Entire card is the visual summary for one playlist. */
     <div
       className="rounded-2xl border border-slate-700/40 p-5 card-hover group relative"
       style={{ backgroundColor: '#131520' }}
     >
       <div className="flex items-center justify-between gap-2 mb-3">
+        {/* Left side: optional custom name and platform badge. */}
         <div className="flex items-center gap-2 min-w-0">
           {renamedName && (
             <span className="text-sm font-semibold text-slate-100 truncate">{renamedName}</span>
           )}
           <PlatformBadge url={playlist.externalUrl} />
         </div>
+        {/* Right side: processed date and overflow menu. */}
         <div className="flex items-center gap-2 flex-shrink-0">
           <span className="text-slate-600 text-xs">{formatDate(playlist.processedAt)}</span>
           <div className="relative" ref={menuRef}>
             <button
               onClick={(e) => {
+                // Keep the menu click from triggering card navigation.
                 e.stopPropagation()
                 setMenuOpen((v) => !v)
               }}
@@ -262,12 +347,14 @@ export default function PlaylistCard({ playlist, onRenamed, onDeleted }) {
               </svg>
             </button>
             {menuOpen && (
+              /* Floating menu for rename/delete actions. */
               <div
                 className="absolute right-0 mt-1 w-40 rounded-xl border border-slate-700/60 shadow-lg overflow-hidden z-20"
                 style={{ backgroundColor: '#1a1d2e' }}
               >
                 <button
                   onClick={(e) => {
+                    // Open rename modal from the menu.
                     e.stopPropagation()
                     setMenuOpen(false)
                     setShowRename(true)
@@ -278,6 +365,7 @@ export default function PlaylistCard({ playlist, onRenamed, onDeleted }) {
                 </button>
                 <button
                   onClick={(e) => {
+                    // Open delete confirmation from the menu.
                     e.stopPropagation()
                     setMenuOpen(false)
                     setShowDelete(true)
@@ -292,6 +380,7 @@ export default function PlaylistCard({ playlist, onRenamed, onDeleted }) {
         </div>
       </div>
 
+      {/* Card body navigates to track detail. */}
       <div onClick={() => navigate(`/playlists/${playlist.id}`)} className="cursor-pointer">
         {!renamedName && (
           <p className="text-slate-300 text-sm font-medium group-hover:text-slate-100 transition-colors break-all leading-relaxed">
@@ -316,6 +405,7 @@ export default function PlaylistCard({ playlist, onRenamed, onDeleted }) {
         </div>
       </div>
 
+      {/* Rename dialog is mounted only when requested. */}
       {showRename && (
         <RenameModal
           initialName={playlist.name || ''}
@@ -328,6 +418,7 @@ export default function PlaylistCard({ playlist, onRenamed, onDeleted }) {
           error={error}
         />
       )}
+      {/* Delete confirmation is mounted only when requested. */}
       {showDelete && (
         <ConfirmModal
           title="Delete this playlist?"

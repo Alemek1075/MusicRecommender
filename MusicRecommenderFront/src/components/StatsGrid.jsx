@@ -1,31 +1,45 @@
+/**
+ * Single statistic tile used by StatsGrid. The parent supplies color classes and icon markup so
+ * the card layout remains consistent across all metrics.
+ */
 function StatCard({ label, value, icon, accentClass, bgClass }) {
   return (
+    /* Shared card shell for every statistic. */
     <div
       className="rounded-2xl border border-slate-700/40 p-5"
       style={{ backgroundColor: '#131520' }}
     >
       <div className="flex items-start justify-between gap-2">
+        {/* Text column truncates long genre/artist labels instead of resizing the card. */}
         <div className="min-w-0">
           <p className="text-slate-500 text-xs font-medium uppercase tracking-wider mb-1.5">
             {label}
           </p>
           <p className={`text-2xl font-bold truncate ${accentClass}`}>{value}</p>
         </div>
+        {/* Icon chip uses a metric-specific background color. */}
         <div className={`p-2.5 rounded-xl flex-shrink-0 ${bgClass}`}>{icon}</div>
       </div>
     </div>
   )
 }
 
+/**
+ * Four-card summary for imported library statistics. It gracefully hides itself until statistics
+ * are loaded and formats total duration into a compact human-readable label.
+ */
 export default function StatsGrid({ stats }) {
+  // Hide the grid until a caller has stats data.
   if (!stats) return null
 
+  // Keep zero-hour playlists readable by showing only minutes instead of "0h Xm".
   const duration =
     stats.totalHours > 0
       ? `${stats.totalHours}h ${stats.totalMinutes}m`
       : `${stats.totalMinutes}m`
 
   return (
+    /* Two columns on mobile, four columns on medium and wider screens. */
     <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
       <StatCard
         label="Total Tracks"

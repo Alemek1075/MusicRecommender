@@ -4,7 +4,11 @@ import { api } from '../api/client'
 import LoadingSpinner from '../components/LoadingSpinner'
 import ErrorMessage from '../components/ErrorMessage'
 
+/**
+ * Formats recommendation timestamps for the compact history row date label.
+ */
 function formatDate(dateStr) {
+  // Convert backend UTC timestamp into local short date/time text.
   return new Date(dateStr).toLocaleDateString('en-US', {
     month: 'short',
     day: 'numeric',
@@ -14,13 +18,23 @@ function formatDate(dateStr) {
   })
 }
 
+/**
+ * Keeps long playlist URLs from dominating the history card header.
+ */
 function truncateUrl(url, max = 45) {
+  // Keep empty/short URLs unchanged.
   if (!url || url.length <= max) return url
+
+  // Slice long URLs and add ellipsis for compact card headers.
   return url.slice(0, max) + '…'
 }
 
+/**
+ * Confirmation dialog used for deleting one suggestion or clearing a whole playlist's history.
+ */
 function ConfirmModal({ title, message, confirmLabel = 'Delete', onClose, onConfirm, busy }) {
   return createPortal(
+    /* Modal overlay for destructive history actions. */
     <div
       className="fixed inset-0 z-50 flex items-center justify-center p-4"
       style={{ backgroundColor: 'rgba(0,0,0,0.65)', backdropFilter: 'blur(6px)' }}
@@ -56,21 +70,40 @@ function ConfirmModal({ title, message, confirmLabel = 'Delete', onClose, onConf
   )
 }
 
+/**
+ * History popover that lists the favourite tracks used to produce a suggestion. It receives open
+ * state from the parent so only one suggestion panel is expanded at a time.
+ */
 function FavouritesPanel({ names, numbers, namesMap, isOpen, onToggle }) {
+  // Trigger/panel refs support popover positioning and outside click handling.
   const buttonRef = useRef(null)
   const panelRef = useRef(null)
+
+  // Fixed viewport coordinates used by the portal.
   const [position, setPosition] = useState(null)
+
+  // Favourite track numbers from the suggestion, or an empty list.
   const nums = numbers || []
+
+  // Resolve each number into a display name using fresh namesMap first, then stored names.
   const list = nums.length
     ? nums.map((n, i) => namesMap?.[n] ?? names?.[i] ?? `Track #${n}`)
     : []
+
+  // Count controls label text and empty-state behavior.
   const count = list.length
 
+  // Recompute portal placement while open so the popover stays attached to its trigger during
+  // scroll and resize.
   useLayoutEffect(() => {
     if (!isOpen) {
       setPosition(null)
       return
     }
+    /**
+     * Calculates fixed portal coordinates for the favourites popover while keeping it inside the
+     * viewport.
+     */
     function compute() {
       const btn = buttonRef.current
       if (!btn) return
@@ -96,13 +129,20 @@ function FavouritesPanel({ names, numbers, namesMap, isOpen, onToggle }) {
     }
   }, [isOpen, count])
 
+  // Close on outside click and Escape to match standard popover behavior.
   useEffect(() => {
     if (!isOpen) return
+    /**
+     * Closes the popover when a click starts outside both the trigger and the panel.
+     */
     function handler(e) {
       if (panelRef.current?.contains(e.target)) return
       if (buttonRef.current?.contains(e.target)) return
       onToggle(false)
     }
+    /**
+     * Keyboard escape handler for dismissing the favourites popover.
+     */
     function onKey(e) {
       if (e.key === 'Escape') onToggle(false)
     }
@@ -114,6 +154,7 @@ function FavouritesPanel({ names, numbers, namesMap, isOpen, onToggle }) {
     }
   }, [isOpen, onToggle])
 
+  // No favourite numbers means the backend generated the suggestion from the full playlist.
   if (count === 0) {
     return (
       <p className="text-xs text-slate-700 mt-1.5">
@@ -123,6 +164,7 @@ function FavouritesPanel({ names, numbers, namesMap, isOpen, onToggle }) {
   }
 
   return (
+    /* Compact favourites control below a history suggestion. */
     <div className="mt-1.5">
       <button
         ref={buttonRef}
@@ -150,6 +192,7 @@ function FavouritesPanel({ names, numbers, namesMap, isOpen, onToggle }) {
 
       {isOpen &&
         createPortal(
+          /* Portal popover with resolved favourite track names. */
           <div
             ref={panelRef}
             className="fixed rounded-2xl border border-violet-500/20 shadow-2xl z-[60] overflow-hidden"
@@ -185,18 +228,35 @@ function FavouritesPanel({ names, numbers, namesMap, isOpen, onToggle }) {
   )
 }
 
+/**
+ * One recommendation row inside a playlist history card. It owns deletion confirmation and reports
+ * successful deletion to the parent so the row disappears immediately.
+ */
 function SuggestionRow({ suggestion, namesMap, isPanelOpen, onPanelToggle, onDelete }) {
+  // Confirmation modal visibility for this row.
   const [confirm, setConfirm] = useState(false)
+
+  // Busy state disables delete confirmation while request is in flight.
   const [busy, setBusy] = useState(false)
+
+  // Per-row delete error.
   const [error, setError] = useState(null)
 
+  /**
+   * Deletes this recommendation history item from the backend and updates the local history list.
+   */
   async function handleDelete() {
+    // Disable controls and clear stale row errors.
     setBusy(true)
     setError(null)
     try {
+      // Delete this history item through the API.
       await api.deleteRecommendation(suggestion.id)
+
+      // Notify parent so it removes the row immediately.
       onDelete?.(suggestion.id)
     } catch (err) {
+      // Keep modal open and show the failure.
       setError(err.message)
       setBusy(false)
     }
@@ -264,7 +324,12 @@ function SuggestionRow({ suggestion, namesMap, isPanelOpen, onPanelToggle, onDel
   )
 }
 
+/**
+ * Grouped history card for all suggestions generated from one playlist. It also resolves favourite
+ * track numbers back to names when the backend did not already include them.
+ */
 function PlaylistHistoryCard({ entry, openPanelId, onPanelToggle, onSuggestionDeleted, onPlaylistCleared }) {
+  // Infer source platform from the stored playlist URL.
   const isSpotify = entry.playlistUrl?.includes('spotify.com')
   const isYoutube =
     entry.playlistUrl?.includes('youtube.com') || entry.playlistUrl?.includes('youtu.be')
@@ -277,23 +342,37 @@ function PlaylistHistoryCard({ entry, openPanelId, onPanelToggle, onSuggestionDe
 
   const platform = isSpotify ? 'Spotify' : isYoutube ? 'YouTube' : 'Playlist'
 
+  // Confirmation state for clearing this playlist's full history.
   const [confirmClear, setConfirmClear] = useState(false)
+
+  // Busy state for clear-all request.
   const [busy, setBusy] = useState(false)
+
+  // Map of favourite track number -> readable track label.
   const [namesMap, setNamesMap] = useState(null)
 
+  // Fetch only the favourite tracks referenced by this card, not the entire playlist.
   useEffect(() => {
     const allNumbers = [
+      // Flatten all favourite numbers and de-duplicate them.
       ...new Set(entry.suggestions.flatMap((s) => s.favoriteTrackNumbers || [])),
     ]
+
+    // No favourite numbers means there is nothing to resolve.
     if (!allNumbers.length) {
       setNamesMap({})
       return
     }
+
+    // Cancellation flag prevents state updates after unmount or dependency change.
     let cancelled = false
     api
       .getTracks(entry.playlistId, allNumbers)
       .then((tracks) => {
+        // Ignore late responses after cleanup.
         if (cancelled) return
+
+        // Build number -> "title - artist" lookup.
         const map = {}
         for (const t of tracks || []) {
           map[t.trackNumber] = `${t.trackName} — ${t.artistName}`
@@ -301,24 +380,37 @@ function PlaylistHistoryCard({ entry, openPanelId, onPanelToggle, onSuggestionDe
         setNamesMap(map)
       })
       .catch(() => {
+        // If lookup fails, fallback labels are still usable.
         if (!cancelled) setNamesMap({})
       })
     return () => {
+      // Mark the request as obsolete.
       cancelled = true
     }
   }, [entry.playlistId, entry.suggestions])
 
+  /**
+   * Clears all recommendation rows for this playlist and notifies the parent to remove the card.
+   */
   async function handleClear() {
+    // Disable clear-all button while request is running.
     setBusy(true)
     try {
+      // Delete all recommendation history for this playlist.
       await api.deletePlaylistHistory(entry.playlistId)
+
+      // Remove the card from parent state.
       onPlaylistCleared?.(entry.playlistId)
     } catch (err) {
+      // Keep clear-all errors in console because the modal has no local error display.
       console.error(err)
     }
+
+    // Re-enable controls if the card is still mounted.
     setBusy(false)
   }
 
+  // Custom playlist name, if present, is shown before the platform badge.
   const renamedName = entry.playlistName?.trim()
 
   return (
@@ -384,20 +476,37 @@ function PlaylistHistoryCard({ entry, openPanelId, onPanelToggle, onSuggestionDe
   )
 }
 
+/**
+ * Recommendation history page. It loads grouped history, coordinates the single open favourite
+ * popover, and updates state after row/card deletion.
+ */
 export default function History() {
+  // Grouped history entries from the backend.
   const [history, setHistory] = useState([])
+
+  // Page-level loading and error state.
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState(null)
+
+  // Tracks which suggestion's favourites popover is open.
   const [openPanelId, setOpenPanelId] = useState(null)
 
+  /**
+   * Loads all history groups and exposes errors through the shared retryable error component.
+   */
   async function load() {
+    // Start/restart loading and clear stale errors.
     setLoading(true)
     setError(null)
     try {
+      // Fetch grouped recommendation history.
       setHistory((await api.getHistory()) || [])
     } catch (err) {
+      // Surface load failure in the page error state.
       setError(err.message)
     }
+
+    // Stop loading after success or failure.
     setLoading(false)
   }
 
@@ -405,6 +514,9 @@ export default function History() {
     load()
   }, [])
 
+  /**
+   * Removes a deleted suggestion from local grouped history and drops empty playlist groups.
+   */
   function handleSuggestionDeleted(playlistId, suggestionId) {
     setHistory((prev) =>
       prev
@@ -417,10 +529,14 @@ export default function History() {
     )
   }
 
+  /**
+   * Removes a playlist group after all of its recommendation history has been cleared.
+   */
   function handlePlaylistCleared(playlistId) {
     setHistory((prev) => prev.filter((entry) => entry.playlistId !== playlistId))
   }
 
+  // Used only for the summary sentence under the page title.
   const totalSuggestions = history.reduce((sum, e) => sum + e.suggestions.length, 0)
 
   return (

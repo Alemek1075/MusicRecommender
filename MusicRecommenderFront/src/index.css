@@ -2,11 +2,14 @@
 @tailwind components;
 @tailwind utilities;
 
+/* Global browser resets and base visual defaults shared by every React page. */
 @layer base {
+  /* Border-box sizing makes Tailwind width/height utilities easier to reason about. */
   * {
     box-sizing: border-box;
   }
 
+  /* App-wide dark background and text color so individual pages only style their own surfaces. */
   body {
     font-family: 'Inter', system-ui, sans-serif;
     background-color: #0b0d17;
@@ -16,6 +19,7 @@
     -moz-osx-font-smoothing: grayscale;
   }
 
+  /* Thin custom scrollbar that matches the dark UI without taking visual attention. */
   ::-webkit-scrollbar {
     width: 5px;
   }
@@ -34,7 +38,9 @@
   }
 }
 
+/* Small reusable utilities that are easier to name once than repeat across components. */
 @layer utilities {
+  /* Subtle card lift used by playlist cards on hover. */
   .card-hover {
     transition: transform 0.18s ease, box-shadow 0.18s ease, border-color 0.18s ease;
   }
@@ -45,6 +51,7 @@
     border-color: rgba(139, 92, 246, 0.35) !important;
   }
 
+  /* Frosted sticky navbar background. */
   .glass-nav {
     background: rgba(11, 13, 23, 0.88);
     backdrop-filter: blur(14px);

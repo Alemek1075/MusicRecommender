@@ -1,25 +1,53 @@
 import { useState, useRef, useLayoutEffect, useEffect } from 'react'
 import { createPortal } from 'react-dom'
 
+/**
+ * Normalizes favourite track numbers from either the current API array shape or the older
+ * comma-separated history shape.
+ */
 function parseFavNums(favoriteTrackNumbers) {
+  // Current API shape already sends arrays, so return them unchanged.
   if (Array.isArray(favoriteTrackNumbers)) return favoriteTrackNumbers
+
+  // Older/persisted shapes may be comma-separated strings.
   if (typeof favoriteTrackNumbers === 'string')
     return favoriteTrackNumbers
+      // Split "1,2,3" into separate string tokens.
       .split(',')
+      // Parse each token as an integer.
       .map((n) => parseInt(n.trim(), 10))
+      // Remove NaN/0 values.
       .filter(Boolean)
+
+  // Unknown shapes mean there are no favourite numbers to display.
   return []
 }
 
+/**
+ * Popover that explains which playlist tracks were used as favourites for the recommendation.
+ */
 function FavouritesPanel({ favNums, namesMap }) {
+  // Local open state controls this popover.
   const [isOpen, setIsOpen] = useState(false)
+
+  // Trigger and panel refs are used for positioning and outside-click detection.
   const buttonRef = useRef(null)
   const panelRef = useRef(null)
+
+  // Fixed-position coordinates for the portal panel.
   const [position, setPosition] = useState(null)
+
+  // Count drives label text and the no-favourites branch.
   const count = favNums.length
 
+  // Measure the trigger and viewport whenever the panel opens so the portal can be positioned
+  // near the button without overflowing the visible window.
   useLayoutEffect(() => {
     if (!isOpen) { setPosition(null); return }
+    /**
+     * Calculates fixed-position coordinates for the portal panel based on the trigger button and
+     * current viewport dimensions.
+     */
     function compute() {
       const btn = buttonRef.current
       if (!btn) return
@@ -45,13 +73,20 @@ function FavouritesPanel({ favNums, namesMap }) {
     }
   }, [isOpen, count])
 
+  // Close the panel on outside click or Escape, matching normal popover behavior.
   useEffect(() => {
     if (!isOpen) return
+    /**
+     * Closes the popover when a pointer event starts outside both the button and the panel.
+     */
     function handler(e) {
       if (panelRef.current?.contains(e.target)) return
       if (buttonRef.current?.contains(e.target)) return
       setIsOpen(false)
     }
+    /**
+     * Keyboard escape handler for dismissing the popover.
+     */
     function onKey(e) { if (e.key === 'Escape') setIsOpen(false) }
     document.addEventListener('mousedown', handler)
     document.addEventListener('keydown', onKey)
@@ -61,6 +96,7 @@ function FavouritesPanel({ favNums, namesMap }) {
     }
   }, [isOpen])
 
+  // Empty favourite list means the backend used the full playlist as the seed pool.
   if (count === 0) {
     return (
       <div className="mt-5 pt-4 border-t border-slate-700/40">
@@ -71,9 +107,11 @@ function FavouritesPanel({ favNums, namesMap }) {
     )
   }
 
+  // Prefer resolved track names from the current playlist; fall back to numbered labels if needed.
   const list = favNums.map((n) => namesMap?.[n] ?? `Track #${n}`)
 
   return (
+    /* Recommendation favourite explanation area. */
     <div className="mt-5 pt-4 border-t border-slate-700/40">
       <button
         ref={buttonRef}
@@ -99,6 +137,7 @@ function FavouritesPanel({ favNums, namesMap }) {
 
       {isOpen &&
         createPortal(
+          /* Portal keeps the popover above surrounding card overflow. */
           <div
             ref={panelRef}
             className="fixed rounded-2xl border border-violet-500/20 shadow-2xl z-[60] overflow-hidden"
@@ -134,13 +173,23 @@ function FavouritesPanel({ favNums, namesMap }) {
   )
 }
 
+/**
+ * Displays the latest generated recommendation(s). The component supports both a single large
+ * result and a compact batch result when the user requests multiple suggestions.
+ */
 export default function RecommendationResult({ recommendations, tracks, onDismiss }) {
+  // Nothing to render until a recommendation exists.
   if (!recommendations?.length) return null
 
+  // Single results use a larger feature layout; batches use a compact list.
   const isSingle = recommendations.length === 1
+
+  // First result supplies the favourite-seed explanation.
   const first = recommendations[0]
 
+  // Normalize stored favourite numbers for the popover.
   const favNums = parseFavNums(first.favoriteTrackNumbers)
+  // Map playlist track numbers to readable "title - artist" labels for the favourite popover.
   const namesMap = tracks
     ? Object.fromEntries(
         tracks.map((t) => [t.trackNumber, `${t.trackName} — ${t.artistName}`])
@@ -148,6 +197,7 @@ export default function RecommendationResult({ recommendations, tracks, onDismis
     : {}
 
   return (
+    /* Recommendation result card. */
     <div
       className="rounded-2xl border border-violet-500/30 p-6"
       style={{
