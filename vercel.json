@@ -4,7 +4,7 @@
   "installCommand": "npm install && npm --prefix MusicRecommenderFront install",
   "framework": null,
   "rewrites": [
-    { "source": "/api/:path*", "destination": "https://terrorist-counting-punch-guru.trycloudflare.com/api/:path*" },
+    { "source": "/api/:path*", "destination": "https://bin-damages-vegetarian-delivered.trycloudflare.com/api/:path*" },
     { "source": "/(.*)", "destination": "/index.html" }
   ]
 }

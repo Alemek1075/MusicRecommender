@@ -23,9 +23,16 @@ public class PlaylistProcessingService
     private readonly HttpClient _http;
     private readonly IHttpClientFactory _httpFactory;
 
+    private sealed record SpotifyAuth(SpotifyClient Client, bool CanUseWebApiTrackEndpoint);
+    private sealed record SpotifyRawTrack(string Name, string Artist, int DurationMs);
+
     // Prepositions and social-media words that never appear in real genre names
     private static readonly HashSet<string> _tagStopWords = new(StringComparer.OrdinalIgnoreCase)
     { "by", "for", "from", "tiktok", "viral", "twitter", "instagram", "youtube", "tribute", "parody" };
+
+    private static readonly Regex SpotifyTrackReferencePattern = new(
+        @"(?:open\.spotify\.com/track/|spotify:track:)([A-Za-z0-9]{22})",
+        RegexOptions.IgnoreCase | RegexOptions.Compiled);
 
     private static bool IsLikelyMusicGenre(string tag)
     {
@@ -490,20 +497,19 @@ public class PlaylistProcessingService
         catch { return null; }
     }
 
-    private async Task<PlaylistProcessingResult> ProcessSpotifyAsync(string url, Uri uri)
+    private string GetSpotifyMarket()
     {
-        var segments = uri.AbsolutePath.Split('/', StringSplitOptions.RemoveEmptyEntries);
-        var playlistIdx = Array.IndexOf(segments, "playlist");
-        if (playlistIdx < 0 || playlistIdx + 1 >= segments.Length)
-            throw new ArgumentException("Invalid Spotify playlist URL.");
-        var playlistId = segments[playlistIdx + 1];
+        var market = _config["Spotify:Market"];
+        return string.IsNullOrWhiteSpace(market) ? "US" : market.Trim().ToUpperInvariant();
+    }
 
+    private async Task<SpotifyAuth> CreateSpotifyAuthAsync()
+    {
         var clientId = _config["Spotify:ClientId"];
         var clientSecret = _config["Spotify:ClientSecret"];
         bool hasCredentials = !string.IsNullOrWhiteSpace(clientId) && clientId != "mock_id"
                            && !string.IsNullOrWhiteSpace(clientSecret) && clientSecret != "mock_secret";
 
-        SpotifyClient spotify;
         if (hasCredentials)
         {
             try
@@ -512,7 +518,7 @@ public class PlaylistProcessingService
                     new ClientCredentialsRequest(clientId!, clientSecret!));
                 var cfg = SpotifyClientConfig.CreateDefault()
                     .WithToken(token.AccessToken, token.TokenType ?? "Bearer");
-                spotify = new SpotifyClient(cfg);
+                return new SpotifyAuth(new SpotifyClient(cfg), true);
             }
             catch (APIException ex)
             {
@@ -520,32 +526,197 @@ public class PlaylistProcessingService
                     $"Spotify rejected the configured API credentials. {FormatSpotifyApiError(ex)}", ex);
             }
         }
-        else
-        {
-            var anonToken = await GetSpotifyAnonymousTokenAsync();
-            if (string.IsNullOrWhiteSpace(anonToken))
-                throw new InvalidOperationException("Could not connect to Spotify. Set Spotify:ClientId and Spotify:ClientSecret in appsettings.json for reliable access.");
-            spotify = new SpotifyClient(SpotifyClientConfig.CreateDefault().WithToken(anonToken, "Bearer"));
-        }
 
-        var rawTracks = new List<(string Name, string Artist, int DurationMs)>();
+        var anonToken = await GetSpotifyAnonymousTokenAsync();
+        if (string.IsNullOrWhiteSpace(anonToken))
+            throw new InvalidOperationException("Could not connect to Spotify. Set Spotify:ClientId and Spotify:ClientSecret in appsettings.json for reliable access.");
+
+        return new SpotifyAuth(
+            new SpotifyClient(SpotifyClientConfig.CreateDefault().WithToken(anonToken, "Bearer")),
+            false);
+    }
+
+    private async Task<string?> FetchSpotifyEmbedHtmlAsync(string playlistId)
+    {
         try
         {
-            var spotifyPlaylistItems = await spotify.Playlists.GetPlaylistItems(playlistId);
-            await foreach (var item in spotify.Paginate(spotifyPlaylistItems))
+            using var client = _httpFactory.CreateClient();
+            using var request = new HttpRequestMessage(
+                HttpMethod.Get,
+                $"https://open.spotify.com/embed/playlist/{Uri.EscapeDataString(playlistId)}");
+            request.Headers.UserAgent.ParseAdd(
+                "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36");
+            request.Headers.Accept.ParseAdd("text/html");
+
+            using var response = await client.SendAsync(request);
+            if (!response.IsSuccessStatusCode) return null;
+            return await response.Content.ReadAsStringAsync();
+        }
+        catch
+        {
+            return null;
+        }
+    }
+
+    private static List<string> ExtractSpotifyTrackIds(string html) =>
+        SpotifyTrackReferencePattern.Matches(html)
+            .Select(m => m.Groups[1].Value)
+            .Distinct()
+            .ToList();
+
+    private static bool TryFindJsonProperty(JsonElement element, string propertyName, out JsonElement value)
+    {
+        if (element.ValueKind == JsonValueKind.Object)
+        {
+            if (element.TryGetProperty(propertyName, out value))
+                return true;
+
+            foreach (var property in element.EnumerateObject())
+            {
+                if (TryFindJsonProperty(property.Value, propertyName, out value))
+                    return true;
+            }
+        }
+        else if (element.ValueKind == JsonValueKind.Array)
+        {
+            foreach (var item in element.EnumerateArray())
+            {
+                if (TryFindJsonProperty(item, propertyName, out value))
+                    return true;
+            }
+        }
+
+        value = default;
+        return false;
+    }
+
+    private static List<SpotifyRawTrack> ExtractSpotifyTracksFromEmbedState(string html)
+    {
+        var match = Regex.Match(
+            html,
+            @"<script[^>]+id=[""']__NEXT_DATA__[""'][^>]*>(?<json>.*?)</script>",
+            RegexOptions.IgnoreCase | RegexOptions.Singleline);
+        if (!match.Success) return [];
+
+        try
+        {
+            var json = WebUtility.HtmlDecode(match.Groups["json"].Value);
+            using var doc = JsonDocument.Parse(json);
+            if (!TryFindJsonProperty(doc.RootElement, "trackList", out var trackList) ||
+                trackList.ValueKind != JsonValueKind.Array)
+                return [];
+
+            var tracks = new List<SpotifyRawTrack>();
+            foreach (var item in trackList.EnumerateArray())
+            {
+                var title = item.TryGetProperty("title", out var titleElement)
+                    ? titleElement.GetString()
+                    : null;
+                var artist = item.TryGetProperty("subtitle", out var subtitleElement)
+                    ? subtitleElement.GetString()
+                    : null;
+                var duration = item.TryGetProperty("duration", out var durationElement) &&
+                               durationElement.TryGetInt32(out var durationMs)
+                    ? durationMs
+                    : 0;
+
+                if (!string.IsNullOrWhiteSpace(title))
+                    tracks.Add(new SpotifyRawTrack(title, artist ?? "Unknown", duration));
+            }
+
+            return tracks;
+        }
+        catch
+        {
+            return [];
+        }
+    }
+
+    private async Task<List<SpotifyRawTrack>> HydrateSpotifyTracksAsync(SpotifyClient spotify, List<string> trackIds)
+    {
+        var tracks = new List<SpotifyRawTrack>();
+        var market = GetSpotifyMarket();
+
+        foreach (var trackId in trackIds)
+        {
+            var fullTrack = await spotify.Tracks.Get(trackId, new TrackRequest { Market = market });
+            tracks.Add(new SpotifyRawTrack(
+                fullTrack.Name,
+                fullTrack.Artists.FirstOrDefault()?.Name ?? "Unknown",
+                fullTrack.DurationMs));
+        }
+
+        return tracks;
+    }
+
+    private async Task<List<SpotifyRawTrack>?> TryGetSpotifyTracksFromPublicEmbedAsync(string playlistId, SpotifyAuth auth)
+    {
+        var html = await FetchSpotifyEmbedHtmlAsync(playlistId);
+        if (string.IsNullOrWhiteSpace(html))
+            return null;
+
+        var trackIds = ExtractSpotifyTrackIds(html);
+        if (auth.CanUseWebApiTrackEndpoint && trackIds.Count > 0)
+        {
+            try
+            {
+                var hydratedTracks = await HydrateSpotifyTracksAsync(auth.Client, trackIds);
+                if (hydratedTracks.Count > 0)
+                    return hydratedTracks;
+            }
+            catch (APIException)
+            {
+                // Fall back to Spotify's public embed state below.
+            }
+        }
+
+        var embeddedTracks = ExtractSpotifyTracksFromEmbedState(html);
+        return embeddedTracks.Count > 0 ? embeddedTracks : null;
+    }
+
+    private async Task<PlaylistProcessingResult> ProcessSpotifyAsync(string url, Uri uri)
+    {
+        var segments = uri.AbsolutePath.Split('/', StringSplitOptions.RemoveEmptyEntries);
+        var playlistIdx = Array.IndexOf(segments, "playlist");
+        if (playlistIdx < 0 || playlistIdx + 1 >= segments.Length)
+            throw new ArgumentException("Invalid Spotify playlist URL.");
+        var playlistId = segments[playlistIdx + 1];
+
+        var auth = await CreateSpotifyAuthAsync();
+
+        var rawTracks = new List<SpotifyRawTrack>();
+        try
+        {
+            var spotifyPlaylistItems = await auth.Client.Playlists.GetPlaylistItems(playlistId);
+            await foreach (var item in auth.Client.Paginate(spotifyPlaylistItems))
             {
                 if (item.Track is FullTrack fullTrack)
-                    rawTracks.Add((fullTrack.Name, fullTrack.Artists.FirstOrDefault()?.Name ?? "Unknown", fullTrack.DurationMs));
+                    rawTracks.Add(new SpotifyRawTrack(
+                        fullTrack.Name,
+                        fullTrack.Artists.FirstOrDefault()?.Name ?? "Unknown",
+                        fullTrack.DurationMs));
             }
         }
         catch (APIException ex)
         {
-            throw new InvalidOperationException(
-                $"Could not access that Spotify playlist. {FormatSpotifyApiError(ex)}", ex);
+            var fallbackTracks = await TryGetSpotifyTracksFromPublicEmbedAsync(playlistId, auth);
+            if (fallbackTracks is { Count: > 0 })
+                rawTracks = fallbackTracks;
+            else
+                throw new InvalidOperationException(
+                    $"Could not access that Spotify playlist. {FormatSpotifyApiError(ex)}", ex);
         }
 
         if (rawTracks.Count == 0)
-            throw new InvalidOperationException("The Spotify playlist is empty or has no audio tracks.");
+        {
+            var fallbackTracks = await TryGetSpotifyTracksFromPublicEmbedAsync(playlistId, auth);
+            if (fallbackTracks is { Count: > 0 })
+                rawTracks = fallbackTracks;
+        }
+
+        if (rawTracks.Count == 0)
+            throw new InvalidOperationException(
+                "The Spotify playlist is empty, has no audio tracks, or is not available through Spotify's public playlist data.");
 
         var allUniqueArtists = rawTracks
             .GroupBy(t => t.Artist, StringComparer.OrdinalIgnoreCase)
