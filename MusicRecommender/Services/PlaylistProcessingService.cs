@@ -148,6 +148,12 @@ public class PlaylistProcessingService
         if (tracks.Count == 0)
             throw new InvalidOperationException("Playlist not found or has no tracks.");
 
+        var playlist = await _db.Playlists
+            .AsNoTracking()
+            .FirstOrDefaultAsync(p => p.Id == playlistId);
+        var isSpotifyPlaylist = playlist?.ExternalUrl.Contains("spotify.com", StringComparison.OrdinalIgnoreCase) == true;
+        var spotifyAuth = isSpotifyPlaylist ? await CreateSpotifyAuthAsync() : null;
+
         if (selectedTrackNumbers.Count > 0)
         {
             var validNumbers = new HashSet<int>(tracks.Select(t => t.TrackNumber));
@@ -241,52 +247,107 @@ public class PlaylistProcessingService
             }
             var searchQuery = queries[rng.Next(queries.Count)];
 
-            // ── YOUTUBE SEARCH ─────────────────────────────────────────────────
-            var youtube = new YoutubeClient();
-            var scanned = 0;
-            var candidates = new List<(string Title, string Artist, string VideoId)>();
-
-            await foreach (var result in youtube.Search.GetVideosAsync(searchQuery))
-            {
-                if (++scanned > 200) break;
-                if (result.Duration == null || result.Duration.Value.TotalMinutes > 15) continue;
-                var titleLower = result.Title.ToLowerInvariant();
-                if (titleLower.Contains("playlist") || titleLower.Contains("compilation") ||
-                    titleLower.Contains("reaction") || titleLower.Contains(" | ")) continue;
-                var (artist, title) = ParseYouTubeTitle(result.Title, result.Author.ChannelTitle);
-                var cleanTitle = TitleSuffixPattern.Replace(title, "").Trim();
-                if (string.IsNullOrWhiteSpace(cleanTitle)) continue;
-                if (!IsDuplicateTitle(cleanTitle, existingNormalized))
-                {
-                    candidates.Add((cleanTitle, artist, result.Id));
-                    if (candidates.Count >= 12) break;
-                }
-            }
-
             var recTitle = "No recommendation found";
             var recArtist = seedTrack.ArtistName;
 
-            if (candidates.Count > 0)
+            if (isSpotifyPlaylist && spotifyAuth != null)
             {
-                var viewCounts = await Task.WhenAll(candidates.Select(async c =>
+                SearchResponse search;
+                try
                 {
-                    try { return (await youtube.Videos.GetAsync(c.VideoId)).Engagement.ViewCount; }
-                    catch { return 0L; }
-                }));
-
-                var weighted = candidates
-                    .Select((c, i) => (c, weight: Math.Sqrt(Math.Max(viewCounts[i], 1L))))
-                    .ToList();
-                double total = weighted.Sum(x => x.weight);
-                double roll = rng.NextDouble() * total;
-                var pick = weighted[^1].c;
-                foreach (var w in weighted)
-                {
-                    roll -= w.weight;
-                    if (roll <= 0) { pick = w.c; break; }
+                    search = await spotifyAuth.Client.Search.Item(new SearchRequest(
+                        SearchRequest.Types.Track,
+                        searchQuery)
+                    {
+                        Market = GetSpotifyMarket(),
+                        Limit = 10
+                    });
                 }
-                recTitle = pick.Title;
-                recArtist = pick.Artist;
+                catch (APIException ex)
+                {
+                    throw new InvalidOperationException(
+                        $"Could not search Spotify for recommendations. {FormatSpotifyApiError(ex)}", ex);
+                }
+
+                var spotifyCandidates = (search.Tracks.Items ?? [])
+                    .Where(t => t != null)
+                    .Where(t => !string.IsNullOrWhiteSpace(t.Name))
+                    .Where(t => !IsDuplicateTitle(t.Name, existingNormalized))
+                    .Select(t =>
+                    {
+#pragma warning disable CS0618 // Spotify still returns this weight in current track/search payloads.
+                        var popularity = t.Popularity;
+#pragma warning restore CS0618
+                        return (
+                            Title: t.Name,
+                            Artist: t.Artists.FirstOrDefault()?.Name ?? "Unknown",
+                            Popularity: popularity);
+                    })
+                    .ToList();
+
+                if (spotifyCandidates.Count > 0)
+                {
+                    var weighted = spotifyCandidates
+                        .Select(c => (c, weight: Math.Sqrt(Math.Max(c.Popularity, 1))))
+                        .ToList();
+                    double total = weighted.Sum(x => x.weight);
+                    double roll = rng.NextDouble() * total;
+                    var pick = weighted[^1].c;
+                    foreach (var w in weighted)
+                    {
+                        roll -= w.weight;
+                        if (roll <= 0) { pick = w.c; break; }
+                    }
+                    recTitle = pick.Title;
+                    recArtist = pick.Artist;
+                }
+            }
+            else
+            {
+                // ── YOUTUBE SEARCH ─────────────────────────────────────────────────
+                var youtube = new YoutubeClient();
+                var scanned = 0;
+                var candidates = new List<(string Title, string Artist, string VideoId)>();
+
+                await foreach (var result in youtube.Search.GetVideosAsync(searchQuery))
+                {
+                    if (++scanned > 200) break;
+                    if (result.Duration == null || result.Duration.Value.TotalMinutes > 15) continue;
+                    var titleLower = result.Title.ToLowerInvariant();
+                    if (titleLower.Contains("playlist") || titleLower.Contains("compilation") ||
+                        titleLower.Contains("reaction") || titleLower.Contains(" | ")) continue;
+                    var (artist, title) = ParseYouTubeTitle(result.Title, result.Author.ChannelTitle);
+                    var cleanTitle = TitleSuffixPattern.Replace(title, "").Trim();
+                    if (string.IsNullOrWhiteSpace(cleanTitle)) continue;
+                    if (!IsDuplicateTitle(cleanTitle, existingNormalized))
+                    {
+                        candidates.Add((cleanTitle, artist, result.Id));
+                        if (candidates.Count >= 12) break;
+                    }
+                }
+
+                if (candidates.Count > 0)
+                {
+                    var viewCounts = await Task.WhenAll(candidates.Select(async c =>
+                    {
+                        try { return (await youtube.Videos.GetAsync(c.VideoId)).Engagement.ViewCount; }
+                        catch { return 0L; }
+                    }));
+
+                    var weighted = candidates
+                        .Select((c, i) => (c, weight: Math.Sqrt(Math.Max(viewCounts[i], 1L))))
+                        .ToList();
+                    double total = weighted.Sum(x => x.weight);
+                    double roll = rng.NextDouble() * total;
+                    var pick = weighted[^1].c;
+                    foreach (var w in weighted)
+                    {
+                        roll -= w.weight;
+                        if (roll <= 0) { pick = w.c; break; }
+                    }
+                    recTitle = pick.Title;
+                    recArtist = pick.Artist;
+                }
             }
 
             var recommendation = new Recommendation
