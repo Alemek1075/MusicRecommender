@@ -4,7 +4,7 @@
   "installCommand": "npm install && npm --prefix MusicRecommenderFront install",
   "framework": null,
   "rewrites": [
-    { "source": "/api/:path*", "destination": "https://drug-mating-sql-naturally.trycloudflare.com/api/:path*" },
+    { "source": "/api/:path*", "destination": "https://council-christ-permits-dem.trycloudflare.com/api/:path*" },
     { "source": "/(.*)", "destination": "/index.html" }
   ]
 }
